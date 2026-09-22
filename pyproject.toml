@@ -7,6 +7,7 @@ name = "loadsim"
 version = "0.1.0"
 description = "Simple traffic probes for deployed systems"
 requires-python = ">=3.11"
+dependencies = ["httpx>=0.27,<1"]
 
 [tool.setuptools.packages.find]
 include = ["loadsim*"]

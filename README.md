@@ -1,11 +1,32 @@
 # loadsim
 
+## One local KV iteration
+
+With Docker running, deploy the reference submission, run three five-second
+GET/PUT/DELETE traffic phases, and save every scheduled request to SQLite:
+
+```sh
+uv run python scripts/run_kv_iteration.py ./solutions/KeyValueStore/solution
+```
+
+The script starts an isolated one-shot deployment server, mounts the supplied
+`tasks/distributed-kv-k3s/environment/seed/kv.jsonl`, and checks that the
+service imported it. It uses the returned API URL and kubeconfig, then removes
+the deployment containers after traffic completes. The database and deployment
+logs are kept under the ignored `.run-data/` directory. Each run prints its
+job ID and a latency summary. `--rate`, `--duration`, `--max-in-flight`, and
+`--timeout` adjust the traffic phases; `--database` selects another SQLite
+file. The Docker daemon needs room for the 6 vCPU, 8 GiB deployment sandbox.
+
+The first iteration covers baseline operations and latency. Fault injection,
+overload scenarios, and CPU/memory measurements are later work.
+
 A small Python library for steady traffic probes. It records the start time,
 latency, and outcome of every scheduled call.
 
 ```python
 import asyncio
-import httpx  # Install separately: pip install httpx
+import httpx
 
 from loadsim import LoadSimClient
 
