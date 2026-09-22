@@ -1,0 +1,26 @@
+schema_version = "1.4"
+
+[task]
+name = "system-design/distributed-kv-k3s"
+version = "1.0.0"
+description = "Build and deploy a resilient key-value service on local K3s"
+keywords = ["system-design", "kubernetes", "k3s", "distributed-systems", "key-value-store"]
+
+[metadata]
+category = "software-engineering"
+difficulty_explanation = "Requires a fresh K3s deployment, linearizable operations, node-loss durability, and a working HTTP API under a strict resource budget."
+source_spec = "solutions/KeyValueStore/spec.md"
+target_harness = "codex"
+
+[agent]
+timeout_sec = 3600.0
+
+[verifier]
+timeout_sec = 900.0
+
+[environment]
+build_timeout_sec = 1800.0
+cpus = 6
+memory_mb = 8192
+storage_mb = 20480
+network_mode = "public"

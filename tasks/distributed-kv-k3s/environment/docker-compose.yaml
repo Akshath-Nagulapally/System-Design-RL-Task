@@ -1,0 +1,8 @@
+services:
+  main:
+    privileged: true
+    environment:
+      DOCKER_TLS_CERTDIR: ""
+    ports:
+      - "8080:8080"
+      - "6443:6443"
