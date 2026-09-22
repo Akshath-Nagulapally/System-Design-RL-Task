@@ -1,5 +1,33 @@
 # loadsim
 
+## Data flow
+
+Harbor generates a submission, while the local runner measures a supplied
+submission directory. Passing Harbor's output to the runner is a manual step
+today.
+
+```mermaid
+flowchart TD
+    Spec["KV spec + read-only seed"] --> Harbor["Harbor task"]
+    Harbor --> Agent["Codex harness with GLM via OpenRouter"]
+    Agent --> Submission["Generated submission: deploy.sh + source/manifests"]
+    Submission -. "manual handoff" .-> Runner["uv run python scripts/run_kv_iteration.py submission-dir"]
+    Reference["Supplied reference solution"] --> Runner
+    Runner -->|"create UUID job"| DB["SQLite jobs + request_samples in .run-data/"]
+    Runner -->|"archive submission; POST /deploy"| Server["One-shot deployment server"]
+    Server -->|"create 6 vCPU / 8 GiB sandbox"| Docker["Docker sandbox"]
+    Seed["seed/kv.jsonl"] -->|"read-only mount"| Docker
+    Docker -->|"run deploy.sh"| K3s["K3s + submitted KV service"]
+    Docker -->|"deploy.sh writes result.json; server reads ports + artifact paths"| Server
+    Server -->|"API/Kubernetes URLs + kubeconfig"| Runner
+    Runner -->|"health, seed, CRUD checks"| K3s
+    Runner --> LoadSim["Load simulator"]
+    LoadSim -->|"GET, PUT, DELETE traffic"| K3s
+    LoadSim -->|"per-request timestamp, outcome, latency"| DB
+    Runner -->|"completed/failed status"| DB
+    Runner -->|"after traffic"| Cleanup["Remove deployment containers"]
+```
+
 ## One local KV iteration
 
 With Docker running, deploy the reference submission, run three five-second
