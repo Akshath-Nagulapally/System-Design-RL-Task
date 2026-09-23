@@ -20,6 +20,9 @@ tasks/
 The task runner and loadsim run on this machine; the deployment server starts
 a Docker sandbox limited to 6 vCPU and 8 GiB of RAM.
 
+The runtime code is in `task_runner/`, `loadsim/`, and `deployment_server/`.
+Harbor's Codex adapter is in `tasks/harbor_agents/`.
+
 ## Data flow
 
 ```mermaid
@@ -76,9 +79,7 @@ cleanup ID` if a run was interrupted before loadsim.
 Set `TASK_RUNNER_STATE_DIR` to keep job state and SQLite data in another
 directory; its default is `.run-data/`.
 
-The original `scripts/run_kv_iteration.py` remains available for existing
-one-command runs and historical SQLite data. Fault injection and CPU/memory
-measurements are later work.
+Fault injection and CPU/memory measurements are later work.
 
 Run unit tests with `uv run python -m unittest discover -s tests`. Run the
 reference deployment and loadsim test against real Docker with

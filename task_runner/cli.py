@@ -24,7 +24,7 @@ ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
 
 from loadsim import RunRecorder
-from server import DockerEngine
+from deployment_server.server import DockerEngine
 from .submission import archive_submission, ensure_docker_images
 
 

@@ -29,12 +29,12 @@ Endpoint ports must listen on the sandbox interface and remain available after
 
 ## Run
 
-Requires a running Linux Docker engine or Docker Desktop, Python 3.10+, and
+Requires a running Linux Docker engine or Docker Desktop, Python 3.11+, and
 enough Docker memory for the 8 GiB sandbox. Build the two images:
 
 ```sh
-docker build -f Dockerfile.sandbox -t deployment-sandbox:latest .
-docker build -f Dockerfile.proxy -t deployment-proxy:latest .
+docker build -f deployment_server/Dockerfile.sandbox -t deployment-sandbox:latest .
+docker build -f deployment_server/Dockerfile.proxy -t deployment-proxy:latest .
 ```
 
 For the KeyValueStore task, mount an existing JSONL file at `/seed/kv.jsonl`
@@ -45,13 +45,13 @@ other paths. Set `DEPLOY_PUBLIC_HOST` to an address the grader can reach. The de
 
 ```sh
 DEPLOY_INPUT_MOUNTS='[{"source":"/absolute/path/kv.jsonl","target":"/seed/kv.jsonl"}]' \
-  python3 server.py
+  uv run python -m deployment_server.server
 ```
 
 In another terminal, upload the repository folder and save the response:
 
 ```sh
-tar -czf /tmp/submission.tar.gz -C /path/to/KeyValueStore/solution .
+tar -czf /tmp/submission.tar.gz -C tasks/solutions/KeyValueStore/solution .
 curl -fsS -H 'Content-Type: application/gzip' \
   --data-binary @/tmp/submission.tar.gz \
   http://127.0.0.1:8000/deploy > /tmp/deployment.json
@@ -74,8 +74,8 @@ sandbox, so run untrusted submissions on a dedicated host or VM.
 ## Tests
 
 ```sh
-python3 -m unittest discover -s tests -v
-RUN_DOCKER_SMOKE=1 python3 -m unittest tests.test_docker_smoke -v
-RUN_KV_SMOKE=1 KV_SOLUTION_PATH=/path/to/KeyValueStore/solution \
-  python3 -m unittest tests.test_kv_integration -v
+uv run python -m unittest discover -s tests -v
+RUN_DOCKER_SMOKE=1 uv run python -m unittest discover -s tests -p test_docker_smoke.py -v
+RUN_KV_SMOKE=1 KV_SOLUTION_PATH=tasks/solutions/KeyValueStore/solution \
+  uv run python -m unittest discover -s tests -p test_kv_integration.py -v
 ```

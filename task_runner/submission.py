@@ -34,8 +34,8 @@ def ensure_docker_images() -> None:
     if int(info.stdout.strip()) < 8 * 1024**3:
         print("warning: Docker has less than 8 GiB; increase its memory if deployment fails", file=sys.stderr)
     for name, dockerfile in (
-        ("deployment-sandbox:latest", "Dockerfile.sandbox"),
-        ("deployment-proxy:latest", "Dockerfile.proxy"),
+        ("deployment-sandbox:latest", "deployment_server/Dockerfile.sandbox"),
+        ("deployment-proxy:latest", "deployment_server/Dockerfile.proxy"),
     ):
         build = subprocess.run(["docker", "build", "-f", dockerfile, "-t", name, "."],
                                cwd=ROOT, capture_output=True, text=True)

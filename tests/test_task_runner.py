@@ -2,11 +2,13 @@
 
 from __future__ import annotations
 
+import io
 import json
 import os
 import sqlite3
 import subprocess
 import sys
+import tarfile
 import tempfile
 import threading
 import unittest
@@ -19,11 +21,14 @@ import httpx
 
 from loadsim import LoadSimClient, RunRecorder, TrafficResult, TrafficSample
 from task_runner import cli
+from task_runner.submission import archive_submission
 
 
 class WorkflowHandler(BaseHTTPRequestHandler):
     values = {"welcome": "hello"}
     fail_deploy = False
+    fail_seed_traffic = False
+    seed_reads = 0
 
     def log_message(self, *_args):
         pass
@@ -51,6 +56,10 @@ class WorkflowHandler(BaseHTTPRequestHandler):
             return self.reply(200, {"status": "ok"})
         if self.path.startswith("/v1/kv/"):
             key = self.path.removeprefix("/v1/kv/")
+            if key == "welcome":
+                self.__class__.seed_reads += 1
+                if self.fail_seed_traffic and self.seed_reads > 1:
+                    return self.reply(503, {"error": "unavailable"})
             return self.reply(200, {"value": self.values[key], "version": "1"}) if key in self.values else self.reply(404)
         self.reply(404)
 
@@ -86,6 +95,8 @@ class TaskRunnerTests(unittest.TestCase):
         self.task = cli.Task.load("distributed-kv-k3s")
         WorkflowHandler.values = {"welcome": "hello"}
         WorkflowHandler.fail_deploy = False
+        WorkflowHandler.fail_seed_traffic = False
+        WorkflowHandler.seed_reads = 0
 
     def fake_start(self, job, _task, state):
         job.update({"server_url": self.server.api_url, "server_token": "test"})
@@ -102,6 +113,7 @@ class TaskRunnerTests(unittest.TestCase):
         self.assertTrue((self.task.solution / "deploy.sh").is_file())
         self.assertEqual(self.task.solution, self.task.directory.parent / "solutions/KeyValueStore/solution")
         self.assertEqual(self.task.harbor, self.task.directory.parent / "harbor-task/distributed-kv-k3s")
+        self.assertEqual(self.task.agent, "tasks.harbor_agents.openrouter_codex:OpenRouterCodex")
         self.assertEqual(self.task.seed.read_text().splitlines()[0], '{"key":"welcome","value":"hello"}')
         with self.assertRaisesRegex(ValueError, "unknown task"):
             cli.Task.load("../../task_runner")
@@ -195,6 +207,34 @@ class TaskRunnerTests(unittest.TestCase):
             status, error = db.execute("SELECT status, error FROM jobs WHERE id = ?", (job_id,)).fetchone()
         self.assertEqual(status, "failed")
         self.assertIn("status 7", error)
+
+    def test_http_failures_are_saved_as_request_outcomes(self):
+        job_id = self.fake_deploy()
+        WorkflowHandler.fail_seed_traffic = True
+        with patch.object(cli, "_cleanup_containers"), patch.object(cli, "_stop_server"):
+            summary = cli.loadsim(self.task, state=self.state, rate=20, duration=0.1)
+        self.assertEqual(summary["failures"], 2)
+        with sqlite3.connect(self.state / "task-runner.sqlite3") as db:
+            errors = db.execute(
+                "SELECT phase, outcome, error FROM request_samples "
+                "WHERE job_id = ? AND outcome = 'error'", (job_id,),
+            ).fetchall()
+        self.assertEqual(len(errors), 2)
+        self.assertTrue(all(phase == "get" and outcome == "error" and "503" in error
+                            for phase, outcome, error in errors))
+
+    def test_submission_archive_excludes_local_files_and_requires_deploy_script(self):
+        submission = Path(self.temp.name) / "submission"
+        submission.mkdir()
+        (submission / "deploy.sh").write_text("#!/bin/sh\n")
+        (submission / ".env").write_text("secret=local\n")
+        (submission / ".git").mkdir()
+        (submission / ".git" / "config").write_text("local\n")
+        with tarfile.open(fileobj=io.BytesIO(archive_submission(submission)), mode="r:gz") as archive:
+            self.assertEqual(archive.getnames(), ["deploy.sh"])
+        (submission / "deploy.sh").unlink()
+        with self.assertRaisesRegex(ValueError, "missing deploy.sh"):
+            archive_submission(submission)
 
     def test_failed_deploy_records_error_and_stops_server(self):
         WorkflowHandler.fail_deploy = True
