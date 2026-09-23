@@ -31,12 +31,14 @@ class OpenRouterCodexTests(unittest.IsolatedAsyncioTestCase):
                 extra_env={"OPENROUTER_API_KEY": "test-key-only"},
             )
             agent.exec_as_agent = AsyncMock()
+            agent.exec_as_root = AsyncMock()
             environment = FakeEnvironment()
             await agent.run("say hello", environment, None)
 
         commands = [call.kwargs["command"] for call in agent.exec_as_agent.call_args_list]
         self.assertEqual(environment.uploaded_path, "/tmp/codex-openrouter.key")
         self.assertEqual(environment.uploaded_contents, "test-key-only")
+        self.assertEqual(agent.exec_as_root.call_args.kwargs["command"], "openrc default")
         self.assertIn('model_provider = "openrouter"', commands[0])
         self.assertIn('wire_api = "responses"', commands[0])
         self.assertIn("--model z-ai/glm-5", commands[1])

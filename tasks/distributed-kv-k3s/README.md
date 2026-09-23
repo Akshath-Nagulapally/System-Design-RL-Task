@@ -22,7 +22,7 @@ root (replace the env-file path with its actual location):
 ```sh
 PYTHONPATH="$PWD" harbor run -p tasks/distributed-kv-k3s -e docker \
   --agent-import-path harbor_agents.openrouter_codex:OpenRouterCodex \
-  -m z-ai/glm-5 --env-file /path/to/.env \
+  -m z-ai/glm-5.3 --env-file /path/to/.env \
   --disable-verification --artifact /app \
   --jobs-dir .run-data/harbor-jobs --n-concurrent 1
 ```
@@ -33,3 +33,7 @@ separate deployment and load test. Verification is disabled because this task
 still has a placeholder verifier. The agent container does not publish host
 ports; its own `deploy.sh` is responsible for exposing ports within the
 sandbox during evaluation.
+
+The Harbor container includes the same K3s tooling and OpenRC setup as the
+deployment sandbox, so the agent can exercise a fresh deployment before it
+submits its files.

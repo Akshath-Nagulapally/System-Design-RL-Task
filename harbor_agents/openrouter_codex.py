@@ -38,6 +38,9 @@ class OpenRouterCodex(Codex):
             await environment.upload_file(local_key, key_path)
 
         try:
+            # Match the deployment sandbox's OpenRC initialization before an
+            # agent tries a fresh K3s install in this privileged environment.
+            await self.exec_as_root(environment, command="openrc default")
             if environment.default_user is not None:
                 await self.exec_as_root(
                     environment,

@@ -14,12 +14,16 @@ Spinning up kubernetes cluster should also be included within our script. The te
   receives a score of 0.
 
 ## API
-- `PUT /v1/kv/{key}` — store a UTF-8 value; return its version.
-- `GET /v1/kv/{key}` — return value and version, or 404.
-- `DELETE /v1/kv/{key}` — remove the key.
-- `GET /healthz` — report readiness.
-- PUT supports `If-Match` for a conditional update; a version mismatch
-  returns 412. Keys are 1–128 URL-safe characters; values are at most 4 KiB.
+- `PUT /v1/kv/{key}` accepts JSON `{"value":"..."}` containing a UTF-8
+  string. On success it returns JSON `{"version":"..."}` and an `ETag`
+  header containing the quoted version.
+- `GET /v1/kv/{key}` returns JSON `{"value":"...","version":"..."}` and
+  the corresponding `ETag`, or HTTP 404 when the key is absent.
+- `DELETE /v1/kv/{key}` removes the key and returns HTTP 204 on success.
+- `GET /healthz` returns HTTP 200 only when the service is ready.
+- PUT supports a quoted version in `If-Match` for a conditional update; a
+  version mismatch returns HTTP 412. Keys are 1–128 URL-safe characters;
+  values are at most 4 KiB.
 
 ## Guarantees
 - Successful operations on each key are linearizable.
@@ -36,6 +40,9 @@ The grader records correctness, availability, throughput, and latency.
 ## Deployment handoff
 
 The runner sets `DEPLOY_OUTPUT_DIR` to a writable directory.
+The submission is mounted at `/app`; `/seed/kv.jsonl` is read-only. The
+privileged Docker sandbox includes Docker, Go, a C compiler, OpenRC, k3d,
+kubectl, and jq. A fresh sandbox starts with no existing Kubernetes cluster.
 
 On success, `deploy.sh` must keep the deployment running and write
 `$DEPLOY_OUTPUT_DIR/result.json`. Example:
