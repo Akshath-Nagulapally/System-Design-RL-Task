@@ -45,6 +45,10 @@ logs are kept under the ignored `.run-data/` directory. Each run prints its
 job ID and a latency summary. `--rate`, `--duration`, `--max-in-flight`, and
 `--timeout` adjust the traffic phases; `--database` selects another SQLite
 file. The Docker daemon needs room for the 6 vCPU, 8 GiB deployment sandbox.
+The submission is mounted at `/app`, as in Harbor, with its read-only seed at
+`/seed/kv.jsonl`. The sandbox includes OpenRC, Go with a C compiler, `jq`,
+`kubectl`, and `k3d`; K3s can also be installed directly with `get.k3s.io`.
+The runner rebuilds its Docker images so local runs use the current sandbox.
 
 The first iteration covers baseline operations and latency. Fault injection,
 overload scenarios, and CPU/memory measurements are later work.

@@ -5,9 +5,14 @@ FROM docker:28.0.4-dind
 ARG K3D_VERSION=v5.8.3
 ARG KUBECTL_VERSION=v1.33.4
 
-RUN apk add --no-cache bash busybox-extras coreutils curl iproute2 ca-certificates
+RUN apk add --no-cache bash build-base busybox-extras coreutils curl iproute2 jq openrc ca-certificates
 COPY --from=go /usr/local/go /usr/local/go
 ENV PATH="/usr/local/go/bin:${PATH}"
+
+# OpenRC services can run in this privileged sandbox even though dockerd is PID 1.
+RUN mkdir -p /run/openrc /etc/rancher/k3s && \
+    touch /run/openrc/softlevel && \
+    printf 'snapshotter: native\n' > /etc/rancher/k3s/config.yaml
 
 RUN set -eux; \
     case "$(uname -m)" in x86_64) arch=amd64 ;; aarch64) arch=arm64 ;; *) exit 1 ;; esac; \

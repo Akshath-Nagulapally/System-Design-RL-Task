@@ -140,7 +140,7 @@ class DockerEngine:
         try:
             args = ["run", "-d", "--name", sandbox, "--network", network, "--privileged",
                     "--cpus", "6", "--memory", "8g", "--memory-swap", "8g",
-                    "--mount", f"type=bind,src={repository},dst=/workspace",
+                    "--mount", f"type=bind,src={repository},dst=/app",
                     "--mount", f"type=bind,src={output},dst=/deploy-output"]
             for source, target in self.input_mounts:
                 args += ["--mount", f"type=bind,src={source},dst={target},readonly"]
@@ -149,6 +149,7 @@ class DockerEngine:
             while time.monotonic() < deadline:
                 try:
                     self.command("exec", sandbox, "docker", "info", timeout=10)
+                    self.command("exec", sandbox, "openrc", "default", timeout=30)
                     return network, sandbox
                 except (DeploymentError, subprocess.TimeoutExpired):
                     time.sleep(1)
@@ -161,7 +162,7 @@ class DockerEngine:
         with log_path.open("w") as log:
             log_path.chmod(0o600)
             completed = subprocess.run(
-                ["docker", "exec", "-e", "DEPLOY_OUTPUT_DIR=/deploy-output", "-w", "/workspace",
+                ["docker", "exec", "-e", "DEPLOY_OUTPUT_DIR=/deploy-output", "-w", "/app",
                  sandbox, "bash", "./deploy.sh"],
                 stdout=log, stderr=subprocess.STDOUT, timeout=DEPLOY_TIMEOUT_SECONDS,
             )

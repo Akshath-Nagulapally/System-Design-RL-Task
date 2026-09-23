@@ -105,11 +105,10 @@ def ensure_docker_images() -> None:
         ("deployment-sandbox:latest", "Dockerfile.sandbox"),
         ("deployment-proxy:latest", "Dockerfile.proxy"),
     ):
-        exists = subprocess.run(["docker", "image", "inspect", name],
-                                stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
-        if exists.returncode:
-            subprocess.run(["docker", "build", "-f", dockerfile, "-t", name, "."],
-                           cwd=ROOT, check=True)
+        build = subprocess.run(["docker", "build", "-f", dockerfile, "-t", name, "."],
+                               cwd=ROOT, capture_output=True, text=True)
+        if build.returncode:
+            raise RuntimeError(f"could not build {name}:\n{(build.stderr or build.stdout)[-4000:]}")
 
 
 def first_seed_record(path: Path) -> tuple[str, str]:
