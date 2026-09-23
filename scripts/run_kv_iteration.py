@@ -263,7 +263,7 @@ def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("submission", type=Path, help="directory with deploy.sh at its root")
     parser.add_argument("--seed", type=Path,
-        default=ROOT / "harbor-task/distributed-kv-k3s/environment/seed/kv.jsonl")
+        default=ROOT / "tasks/harbor-task/distributed-kv-k3s/environment/seed/kv.jsonl")
     parser.add_argument("--database", type=Path, default=ROOT / ".run-data/kv-runs.sqlite3")
     parser.add_argument("--rate", type=float, default=10.0, help="scheduled requests per second")
     parser.add_argument("--duration", type=float, default=5.0, help="seconds per traffic phase")

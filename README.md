@@ -1,10 +1,24 @@
 # System design task runner
 
-Each task lives in `tasks/<name>/` with `task_manifest.json`, `prompt.md`, and
-`loadsim.py`. The manifest points to a local reference solution in `solutions/`
-and a Harbor task in `harbor-task/`. The task runner and loadsim run on this
-machine; the deployment server starts a Docker sandbox limited to 6 vCPU and
-8 GiB of RAM.
+Task definitions, Harbor environments, and solutions live under `tasks/`:
+
+```text
+tasks/
+├── distributed-kv-k3s/
+│   ├── task_manifest.json
+│   ├── prompt.md
+│   └── loadsim.py
+├── harbor-task/
+│   └── distributed-kv-k3s/
+└── solutions/
+    └── KeyValueStore/
+        ├── solution/
+        ├── glm53-generated/
+        └── spec.md
+```
+
+The task runner and loadsim run on this machine; the deployment server starts
+a Docker sandbox limited to 6 vCPU and 8 GiB of RAM.
 
 ## Data flow
 
@@ -12,9 +26,9 @@ machine; the deployment server starts a Docker sandbox limited to 6 vCPU and
 flowchart TD
     Manifest["tasks/distributed-kv-k3s/task_manifest.json"] --> Generate["task-runner generate"]
     Prompt["prompt.md"] --> Generate
-    HarborTask["harbor-task/distributed-kv-k3s"] --> Generate
+    HarborTask["tasks/harbor-task/distributed-kv-k3s"] --> Generate
     Generate -->|"Harbor + Codex + OpenRouter"| Generated["Generated repository with deploy.sh"]
-    Reference["solutions/KeyValueStore/solution"] --> Deploy["task-runner deploy"]
+    Reference["tasks/solutions/KeyValueStore/solution"] --> Deploy["task-runner deploy"]
     Generated --> Deploy
     Deploy -->|"POST repository archive"| Server["Local deployment server"]
     Server -->|"6 vCPU / 8 GiB sandbox"| App["K3s + KV service"]
@@ -38,7 +52,7 @@ uv run python -m task_runner distributed-kv-k3s loadsim
 ```
 
 `generate` uses the model and Codex harness in the manifest. It requires a
-gitignored `harbor-task/distributed-kv-k3s/.env` containing
+gitignored `tasks/harbor-task/distributed-kv-k3s/.env` containing
 `OPENROUTER_API_KEY=...`; `--model`, `--agent`, and `--env-file` override its
 defaults. It prints the generated submission path. Harbor logs and generation
 metadata stay under `.run-data/`. Harbor verification remains disabled because

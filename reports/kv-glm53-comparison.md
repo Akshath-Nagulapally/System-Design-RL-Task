@@ -3,7 +3,7 @@
 ## Setup
 
 On 2026-09-22 (America/Chicago), Harbor generated
-[`glm53-generated`](../solutions/KeyValueStore/glm53-generated) with
+[`glm53-generated`](../tasks/solutions/KeyValueStore/glm53-generated) with
 `z-ai/glm-5.3` through the OpenRouter Codex adapter. The completed Harbor
 trial is `kv-glm53-stablekey-20260923/distributed-kv-k3s__tHKcUcy` in the
 gitignored `.run-data/harbor-jobs` directory. Harbor verification was disabled;
