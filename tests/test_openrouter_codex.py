@@ -38,7 +38,7 @@ class OpenRouterCodexTests(unittest.IsolatedAsyncioTestCase):
             await agent.run("say hello", environment, None)
 
         commands = [call.kwargs["command"] for call in agent.exec_as_agent.call_args_list]
-        self.assertEqual(environment.uploaded_path, "/tmp/codex-openrouter.key")
+        self.assertEqual(environment.uploaded_path, "/opt/codex-openrouter.key")
         self.assertEqual(environment.uploaded_contents, "test-key-only")
         self.assertTrue(environment.root_started)
         startup = agent.exec_as_root.call_args.kwargs["command"]
@@ -48,7 +48,7 @@ class OpenRouterCodexTests(unittest.IsolatedAsyncioTestCase):
         self.assertIn('model_provider = "openrouter"', commands[0])
         self.assertIn('wire_api = "responses"', commands[0])
         self.assertIn("--model z-ai/glm-5", commands[1])
-        self.assertIn("rm -f /tmp/codex-openrouter.key", commands[-1])
+        self.assertIn("rm -f /opt/codex-openrouter.key", commands[-1])
         self.assertTrue(all("test-key-only" not in command for command in commands))
         self.assertTrue(all("test-key-only" not in str(call.kwargs.get("env", {}))
                             for call in agent.exec_as_agent.call_args_list))

@@ -27,7 +27,7 @@ class OpenRouterCodex(Codex):
             raise ValueError("OPENROUTER_API_KEY is missing; pass Harbor --env-file")
 
         agent_dir = EnvironmentPaths.agent_dir
-        key_path = "/tmp/codex-openrouter.key"
+        key_path = "/opt/codex-openrouter.key"
         env = {"CODEX_HOME": agent_dir.as_posix()}
 
         try:
@@ -42,7 +42,7 @@ class OpenRouterCodex(Codex):
                     "docker info >/dev/null 2>&1 && openrc default"
                 ),
             )
-            # OpenRC may remount /tmp, so upload the key after it starts.
+            # OpenRC manages /tmp, so keep the key in a stable private path.
             # upload_file keeps the secret out of shell commands and arguments.
             with tempfile.TemporaryDirectory() as temporary:
                 local_key = Path(temporary) / "openrouter.key"
