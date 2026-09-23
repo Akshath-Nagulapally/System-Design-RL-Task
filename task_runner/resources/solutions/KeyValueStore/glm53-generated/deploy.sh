@@ -1,86 +1,117 @@
 #!/usr/bin/env bash
 set -Eeuo pipefail
 
-ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-CLUSTER=kv-store
-IMAGE=kvstore:local
+: "${DEPLOY_TERRAFORM_OUTPUTS:?DEPLOY_TERRAFORM_OUTPUTS is required}"
+: "${DEPLOY_SSH_PRIVATE_KEY:?DEPLOY_SSH_PRIVATE_KEY is required}"
+: "${DEPLOY_OUTPUT_DIR:?DEPLOY_OUTPUT_DIR is required}"
+: "${KV_SEED_FILE:?KV_SEED_FILE is required}"
 
-if [[ -z "${DEPLOY_OUTPUT_DIR:-}" ]]; then
-  echo "DEPLOY_OUTPUT_DIR is not set" >&2
+readonly ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+readonly OUTPUT_DIR="$(mkdir -p "${DEPLOY_OUTPUT_DIR}" && cd "${DEPLOY_OUTPUT_DIR}" && pwd)"
+readonly SERVER_IP="$(jq -r '.api_ip.value' "$DEPLOY_TERRAFORM_OUTPUTS")"
+readonly CONTROL_PLANE_IP="$(jq -r '.droplet_ips.value[0]' "$DEPLOY_TERRAFORM_OUTPUTS")"
+mapfile -t DROPLET_IPS < <(jq -r '.droplet_ips.value[]' "$DEPLOY_TERRAFORM_OUTPUTS")
+
+if [[ -z "$SERVER_IP" || -z "$CONTROL_PLANE_IP" || "${#DROPLET_IPS[@]}" -ne 3 ]]; then
+  echo "Terraform outputs are missing expected IP addresses" >&2
   exit 1
 fi
-mkdir -p "$DEPLOY_OUTPUT_DIR"
-OUTPUT="$(cd "$DEPLOY_OUTPUT_DIR" && pwd)"
 
-cleanup() {
-  k3d kubeconfig get "$CLUSTER" >/dev/null 2>&1 || true
+readonly SSH_TMP_DIR="$(mktemp -d)"
+readonly IMAGE_TMP="$SSH_TMP_DIR/kv-api-image.tar.gz"
+trap 'rm -rf "$SSH_TMP_DIR"' EXIT
+install -m 600 "$DEPLOY_SSH_PRIVATE_KEY" "$SSH_TMP_DIR/id_ed25519"
+
+ssh_run() {
+  local host="$1"
+  shift
+  ssh -i "$SSH_TMP_DIR/id_ed25519" \
+    -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -o ConnectTimeout=10 \
+    -o ServerAliveInterval=10 -o ServerAliveCountMax=6 "root@${host}" "$@"
 }
-trap cleanup EXIT
 
-echo "Building service image..."
-docker build --pull=false -t "$IMAGE" "$ROOT"
+scp_to() {
+  local host="$1" source="$2" destination="$3"
+  scp -i "$SSH_TMP_DIR/id_ed25519" \
+    -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null \
+    "$source" "root@${host}:${destination}"
+}
 
-echo "Creating three-node K3s cluster..."
-k3d cluster delete "$CLUSTER" >/dev/null 2>&1 || true
-k3d cluster create "$CLUSTER" \
-  --api-port 6443 \
-  --servers 1 \
-  --agents 2 \
-  --port '8080:30080@server:0' \
-  --k3s-arg '--disable=traefik@server:0' \
-  --wait
-
-KUBECONFIG="$OUTPUT/kubeconfig"
-k3d kubeconfig get "$CLUSTER" > "$KUBECONFIG"
-chmod 600 "$KUBECONFIG"
-export KUBECONFIG
-
-echo "Importing images..."
-k3d image import "$IMAGE" -c "$CLUSTER"
-
-echo "Deploying etcd quorum and API..."
-kubectl apply -f "$ROOT/k8s/etcd.yaml"
-kubectl apply -f "$ROOT/k8s/api.yaml"
-
-echo "Waiting for etcd quorum..."
-kubectl wait --for=condition=ready pod -l app=etcd --timeout=300s
-
-echo "Waiting for API..."
-kubectl wait --for=condition=ready pod -l app=kv-api --timeout=300s
-
-echo "Importing seed data..."
-IMPORT_POD=kv-seed-import
-kubectl delete pod "$IMPORT_POD" --ignore-not-found >/dev/null
-kubectl run "$IMPORT_POD" \
-  --image="kvstore:local" \
-  --restart=Never \
-  --overrides='{"spec":{"containers":[{"name":"kv-seed-import","image":"kvstore:local","command":["sleep"],"args":["300"]}],"restartPolicy":"Never"}}' >/dev/null
-kubectl wait --for=condition=ready pod "$IMPORT_POD" --timeout=120s
-kubectl exec -i "$IMPORT_POD" -- \
-  env ETCD_ENDPOINTS=http://etcd-0.etcd:2379,http://etcd-1.etcd:2379,http://etcd-2.etcd:2379 \
-  /usr/local/bin/kvimport /dev/stdin < /seed/kv.jsonl
-kubectl delete pod "$IMPORT_POD" --ignore-not-found >/dev/null
-
-echo "Verifying endpoint..."
-for _ in $(seq 1 30); do
-  if curl -fsS http://127.0.0.1:8080/healthz >/dev/null; then
+echo "Waiting for cloud-init and the K3s control plane..."
+for attempt in $(seq 1 90); do
+  if ssh_run "$CONTROL_PLANE_IP" 'cloud-init status --wait && k3s --version' > "$SSH_TMP_DIR/k3s-version"; then
+    grep -q 'v1.35.5+k3s1' "$SSH_TMP_DIR/k3s-version"
     break
   fi
-  sleep 1
+  if (( attempt == 90 )); then
+    echo "Timed out waiting for K3s on $CONTROL_PLANE_IP" >&2
+    exit 1
+  fi
+  sleep 5
 done
-curl -fsS http://127.0.0.1:8080/healthz >/dev/null
-curl -fsS http://127.0.0.1:8080/v1/kv/welcome | grep -q '"hello"'
 
-cat > "$OUTPUT/result.json" <<JSON
-{
-  "endpoints": [
-    {"name": "api", "scheme": "http", "port": 8080},
-    {"name": "kubernetes", "scheme": "https", "port": 6443}
-  ],
-  "artifacts": [
-    {"name": "kubeconfig", "path": "kubeconfig"}
-  ]
-}
-JSON
+echo "Waiting for all K3s nodes..."
+for attempt in $(seq 1 60); do
+  if ssh_run "$CONTROL_PLANE_IP" \
+    'test "$(kubectl get nodes --no-headers | awk '\''$2 == "Ready" { count++ } END { print count+0 }'\'')" -eq 3'; then
+    break
+  fi
+  if (( attempt == 60 )); then
+    echo "Timed out waiting for three ready K3s nodes" >&2
+    exit 1
+  fi
+  sleep 10
+done
 
-echo "Deployment complete"
+echo "Building API image remotely..."
+ssh_run "$CONTROL_PLANE_IP" 'rm -rf /tmp/kv-api-src && mkdir -p /tmp/kv-api-src'
+tar --exclude='./kv' --exclude='.git' --exclude='terraform/.terraform' --exclude='terraform/.terraform' --exclude='terraform/.terraform.lock.hcl' \
+  -czf - -C "$ROOT_DIR" . | \
+  ssh_run "$CONTROL_PLANE_IP" 'tar -xzf - -C /tmp/kv-api-src'
+ssh_run "$CONTROL_PLANE_IP" 'docker build --platform=linux/amd64 --pull -t kv-api:local /tmp/kv-api-src'
+ssh_run "$CONTROL_PLANE_IP" 'docker save kv-api:local | gzip -1 > /tmp/kv-api-image.tar.gz'
+scp_to "$CONTROL_PLANE_IP" '/tmp/kv-api-image.tar.gz' "$IMAGE_TMP"
+
+echo "Distributing API image..."
+for ip in "${DROPLET_IPS[@]}"; do
+  scp_to "$ip" "$IMAGE_TMP" '/tmp/kv-api-image.tar.gz'
+  ssh_run "$ip" 'gunzip -c /tmp/kv-api-image.tar.gz > /tmp/kv-api-image.tar && k3s ctr -n k8s.io images import /tmp/kv-api-image.tar'
+done
+
+echo "Creating kubeconfig artifact and applying manifests..."
+ssh_run "$CONTROL_PLANE_IP" 'cat /etc/rancher/k3s/k3s.yaml' | \
+  sed "s/https:\/\/127.0.0.1:6443/https:\/\/${CONTROL_PLANE_IP}:6443/" > "$OUTPUT_DIR/kubeconfig"
+chmod 600 "$OUTPUT_DIR/kubeconfig"
+export KUBECONFIG="$OUTPUT_DIR/kubeconfig"
+
+kubectl apply -f "$ROOT_DIR/manifests"
+kubectl --namespace kv wait --for=condition=ready pod \
+  --selector=app.kubernetes.io/name=etcd --timeout=360s
+kubectl --namespace kv rollout status deployment/kv-api --timeout=360s
+
+for attempt in $(seq 1 30); do
+  if curl --fail --silent --show-error "http://${SERVER_IP}/healthz" >/dev/null; then
+    break
+  fi
+  if (( attempt == 30 )); then
+    echo "Timed out waiting for the public API health endpoint" >&2
+    exit 1
+  fi
+  sleep 2
+done
+
+echo "Importing seed data..."
+kubectl --namespace kv exec -i deployment/kv-api -- /app -import < "$KV_SEED_FILE"
+
+jq -n \
+  --arg api "http://${SERVER_IP}" \
+  --arg kubernetes "https://${CONTROL_PLANE_IP}:6443" \
+  '{
+    endpoints: [
+      {name: "api", scheme: "http", url: $api},
+      {name: "kubernetes", scheme: "https", url: $kubernetes}
+    ],
+    artifacts: [{name: "kubeconfig", path: "kubeconfig"}]
+  }' > "$OUTPUT_DIR/result.json"
+
+echo "Deployment complete. API: http://${SERVER_IP}"

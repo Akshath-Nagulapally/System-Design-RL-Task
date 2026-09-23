@@ -1,14 +1,19 @@
-FROM golang:1.23-alpine AS build
+FROM --platform=$BUILDPLATFORM golang:1.25.1-alpine AS build
+ARG TARGETOS
+ARG TARGETARCH
 WORKDIR /src
 COPY go.mod go.sum ./
 RUN go mod download
 COPY . .
-RUN CGO_ENABLED=0 go build -o /out/kvserver ./cmd/kvserver && CGO_ENABLED=0 go build -o /out/kvimport ./cmd/kvimport
+RUN CGO_ENABLED=0 GOOS=${TARGETOS} GOARCH=${TARGETARCH} GOFLAGS="-trimpath" \
+    go build -ldflags="-s -w" -o /out/app ./cmd/kv
 
-FROM alpine:3.20
-RUN adduser -D -H -u 10001 kv
-COPY --from=build /out/kvserver /usr/local/bin/kvserver
-COPY --from=build /out/kvimport /usr/local/bin/kvimport
-USER 10001:10001
+FROM debian:bookworm-slim
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends ca-certificates \
+    && rm -rf /var/lib/apt/lists/* \
+    && useradd --system --uid 65532 --no-create-home app
+COPY --from=build /out/app /app
+USER 65532:65532
 EXPOSE 8080
-ENTRYPOINT ["/usr/local/bin/kvserver"]
+ENTRYPOINT ["/app"]
