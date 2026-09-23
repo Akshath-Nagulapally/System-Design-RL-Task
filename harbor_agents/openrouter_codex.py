@@ -30,13 +30,6 @@ class OpenRouterCodex(Codex):
         key_path = "/tmp/codex-openrouter.key"
         env = {"CODEX_HOME": agent_dir.as_posix()}
 
-        # upload_file does not place the key in a shell command or CLI argument.
-        with tempfile.TemporaryDirectory() as temporary:
-            local_key = Path(temporary) / "openrouter.key"
-            local_key.write_text(key)
-            local_key.chmod(0o600)
-            await environment.upload_file(local_key, key_path)
-
         try:
             # Harbor keeps its Docker environment alive with `sleep infinity`,
             # bypassing the dind image's normal daemon entrypoint.
@@ -49,6 +42,13 @@ class OpenRouterCodex(Codex):
                     "docker info >/dev/null 2>&1 && openrc default"
                 ),
             )
+            # OpenRC may remount /tmp, so upload the key after it starts.
+            # upload_file keeps the secret out of shell commands and arguments.
+            with tempfile.TemporaryDirectory() as temporary:
+                local_key = Path(temporary) / "openrouter.key"
+                local_key.write_text(key)
+                local_key.chmod(0o600)
+                await environment.upload_file(local_key, key_path)
             if environment.default_user is not None:
                 await self.exec_as_root(
                     environment,

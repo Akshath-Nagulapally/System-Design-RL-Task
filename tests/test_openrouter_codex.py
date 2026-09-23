@@ -18,6 +18,7 @@ class FakeEnvironment:
     default_user = None
 
     async def upload_file(self, source, target):
+        assert self.root_started
         self.uploaded_path = target
         self.uploaded_contents = Path(source).read_text()
 
@@ -31,13 +32,15 @@ class OpenRouterCodexTests(unittest.IsolatedAsyncioTestCase):
                 extra_env={"OPENROUTER_API_KEY": "test-key-only"},
             )
             agent.exec_as_agent = AsyncMock()
-            agent.exec_as_root = AsyncMock()
+            agent.exec_as_root = AsyncMock(side_effect=lambda *args, **kwargs: setattr(
+                environment, "root_started", True))
             environment = FakeEnvironment()
             await agent.run("say hello", environment, None)
 
         commands = [call.kwargs["command"] for call in agent.exec_as_agent.call_args_list]
         self.assertEqual(environment.uploaded_path, "/tmp/codex-openrouter.key")
         self.assertEqual(environment.uploaded_contents, "test-key-only")
+        self.assertTrue(environment.root_started)
         startup = agent.exec_as_root.call_args.kwargs["command"]
         self.assertIn("dockerd-entrypoint.sh", startup)
         self.assertIn("docker info", startup)
