@@ -1,0 +1,12 @@
+{
+  "schema_version": 1,
+  "solution_repository": "../../solutions/KeyValueStore/solution",
+  "prompt": "./prompt.md",
+  "loadsim_script": "./loadsim.py",
+  "harbor_task": "../../harbor-task/distributed-kv-k3s",
+  "seed": "../../harbor-task/distributed-kv-k3s/environment/seed/kv.jsonl",
+  "generation": {
+    "model": "z-ai/glm-5.3",
+    "agent_import_path": "harbor_agents.openrouter_codex:OpenRouterCodex"
+  }
+}
