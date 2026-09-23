@@ -54,8 +54,9 @@ class Task:
 
     @classmethod
     def load(cls, name: str, root: Path = ROOT) -> "Task":
-        directory = (root / "tasks" / name).resolve()
-        if not directory.is_relative_to((root / "tasks").resolve()) or not directory.is_dir():
+        tasks_root = (root / "task_runner" / "tasks").resolve()
+        directory = (tasks_root / name).resolve()
+        if not directory.is_relative_to(tasks_root) or not directory.is_dir():
             raise ValueError(f"unknown task: {name}")
         manifest = json.loads((directory / "task_manifest.json").read_text())
         if not isinstance(manifest, dict) or manifest.get("schema_version") != 1:
@@ -316,7 +317,7 @@ def loadsim(task: Task, *, job_id: str | None = None, state: Path = STATE,
 
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("task", help="task name under tasks/")
+    parser.add_argument("task", help="task name under task_runner/tasks/")
     commands = parser.add_subparsers(dest="command", required=True)
     generate_parser = commands.add_parser("generate", aliases=["generate_agent_solution"])
     generate_parser.add_argument("--model")

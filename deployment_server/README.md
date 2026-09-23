@@ -51,7 +51,7 @@ DEPLOY_INPUT_MOUNTS='[{"source":"/absolute/path/kv.jsonl","target":"/seed/kv.jso
 In another terminal, upload the repository folder and save the response:
 
 ```sh
-tar -czf /tmp/submission.tar.gz -C tasks/solutions/KeyValueStore/solution .
+tar -czf /tmp/submission.tar.gz -C task_runner/resources/solutions/KeyValueStore/solution .
 curl -fsS -H 'Content-Type: application/gzip' \
   --data-binary @/tmp/submission.tar.gz \
   http://127.0.0.1:8000/deploy > /tmp/deployment.json
@@ -76,6 +76,6 @@ sandbox, so run untrusted submissions on a dedicated host or VM.
 ```sh
 uv run python -m unittest discover -s tests -v
 RUN_DOCKER_SMOKE=1 uv run python -m unittest discover -s tests -p test_docker_smoke.py -v
-RUN_KV_SMOKE=1 KV_SOLUTION_PATH=tasks/solutions/KeyValueStore/solution \
+RUN_KV_SMOKE=1 KV_SOLUTION_PATH=task_runner/resources/solutions/KeyValueStore/solution \
   uv run python -m unittest discover -s tests -p test_kv_integration.py -v
 ```

@@ -111,9 +111,9 @@ class TaskRunnerTests(unittest.TestCase):
 
     def test_manifest_resolves_reference_and_rejects_escape(self):
         self.assertTrue((self.task.solution / "deploy.sh").is_file())
-        self.assertEqual(self.task.solution, self.task.directory.parent / "solutions/KeyValueStore/solution")
-        self.assertEqual(self.task.harbor, self.task.directory.parent / "harbor-task/distributed-kv-k3s")
-        self.assertEqual(self.task.agent, "tasks.harbor_agents.openrouter_codex:OpenRouterCodex")
+        self.assertEqual(self.task.solution, cli.ROOT / "task_runner/resources/solutions/KeyValueStore/solution")
+        self.assertEqual(self.task.harbor, cli.ROOT / "task_runner/resources/harbor-task/distributed-kv-k3s")
+        self.assertEqual(self.task.agent, "task_runner.resources.harbor_agents.openrouter_codex:OpenRouterCodex")
         self.assertEqual(self.task.seed.read_text().splitlines()[0], '{"key":"welcome","value":"hello"}')
         with self.assertRaisesRegex(ValueError, "unknown task"):
             cli.Task.load("../../task_runner")

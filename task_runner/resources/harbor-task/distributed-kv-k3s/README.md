@@ -1,7 +1,7 @@
 # Distributed KV Harbor task
 
 The task runner stages this Harbor task and copies
-`tasks/distributed-kv-k3s/prompt.md` to Harbor's `instruction.md` before a
+`task_runner/tasks/distributed-kv-k3s/prompt.md` to Harbor's `instruction.md` before a
 generation. The agent sees `/app/spec.md` and a read-only seed at
 `/seed/kv.jsonl`. Its deliverable is an executable `/app/deploy.sh` and all
 files needed for a fresh deployment.

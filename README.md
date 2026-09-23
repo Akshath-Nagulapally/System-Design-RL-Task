@@ -1,17 +1,18 @@
 # System design task runner
 
-Task definitions, Harbor environments, and solutions live under `tasks/`:
+The task runner keeps task definitions and their resources together:
 
 ```text
-tasks/
-├── distributed-kv-k3s/
-│   ├── task_manifest.json
-│   ├── prompt.md
-│   └── loadsim.py
-├── harbor-task/
+task_runner/
+├── tasks/
 │   └── distributed-kv-k3s/
-└── solutions/
-    └── KeyValueStore/
+│       ├── task_manifest.json
+│       ├── prompt.md
+│       └── loadsim.py
+└── resources/
+    ├── harbor_agents/
+    ├── harbor-task/distributed-kv-k3s/
+    └── solutions/KeyValueStore/
         ├── solution/
         ├── glm53-generated/
         └── spec.md
@@ -21,17 +22,17 @@ The task runner and loadsim run on this machine; the deployment server starts
 a Docker sandbox limited to 6 vCPU and 8 GiB of RAM.
 
 The runtime code is in `task_runner/`, `loadsim/`, and `deployment_server/`.
-Harbor's Codex adapter is in `tasks/harbor_agents/`.
+Harbor's Codex adapter is in `task_runner/resources/harbor_agents/`.
 
 ## Data flow
 
 ```mermaid
 flowchart TD
-    Manifest["tasks/distributed-kv-k3s/task_manifest.json"] --> Generate["task-runner generate"]
+    Manifest["task_runner/tasks/distributed-kv-k3s/task_manifest.json"] --> Generate["task-runner generate"]
     Prompt["prompt.md"] --> Generate
-    HarborTask["tasks/harbor-task/distributed-kv-k3s"] --> Generate
+    HarborTask["task_runner/resources/harbor-task/distributed-kv-k3s"] --> Generate
     Generate -->|"Harbor + Codex + OpenRouter"| Generated["Generated repository with deploy.sh"]
-    Reference["tasks/solutions/KeyValueStore/solution"] --> Deploy["task-runner deploy"]
+    Reference["task_runner/resources/solutions/KeyValueStore/solution"] --> Deploy["task-runner deploy"]
     Generated --> Deploy
     Deploy -->|"POST repository archive"| Server["Local deployment server"]
     Server -->|"6 vCPU / 8 GiB sandbox"| App["K3s + KV service"]
@@ -55,7 +56,7 @@ uv run python -m task_runner distributed-kv-k3s loadsim
 ```
 
 `generate` uses the model and Codex harness in the manifest. It requires a
-gitignored `tasks/harbor-task/distributed-kv-k3s/.env` containing
+gitignored `task_runner/resources/harbor-task/distributed-kv-k3s/.env` containing
 `OPENROUTER_API_KEY=...`; `--model`, `--agent`, and `--env-file` override its
 defaults. It prints the generated submission path. Harbor logs and generation
 metadata stay under `.run-data/`. Harbor verification remains disabled because
