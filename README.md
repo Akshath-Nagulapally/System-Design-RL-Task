@@ -1,11 +1,64 @@
 # loadsim
 
+## Data flow
+
+Harbor generates a submission, while the local runner measures a supplied
+submission directory. Passing Harbor's output to the runner is a manual step
+today.
+
+```mermaid
+flowchart TD
+    Spec["KV spec + read-only seed"] --> Harbor["Harbor task"]
+    Harbor --> Agent["Codex harness with GLM via OpenRouter"]
+    Agent --> Submission["Generated submission: deploy.sh + source/manifests"]
+    Submission -. "manual handoff" .-> Runner["uv run python scripts/run_kv_iteration.py submission-dir"]
+    Reference["Supplied reference solution"] --> Runner
+    Runner -->|"create UUID job"| DB["SQLite jobs + request_samples in .run-data/"]
+    Runner -->|"archive submission; POST /deploy"| Server["One-shot deployment server"]
+    Server -->|"create 6 vCPU / 8 GiB sandbox"| Docker["Docker sandbox"]
+    Seed["seed/kv.jsonl"] -->|"read-only mount"| Docker
+    Docker -->|"run deploy.sh"| K3s["K3s + submitted KV service"]
+    Docker -->|"deploy.sh writes result.json; server reads ports + artifact paths"| Server
+    Server -->|"API/Kubernetes URLs + kubeconfig"| Runner
+    Runner -->|"health, seed, CRUD checks"| K3s
+    Runner --> LoadSim["Load simulator"]
+    LoadSim -->|"GET, PUT, DELETE traffic"| K3s
+    LoadSim -->|"per-request timestamp, outcome, latency"| DB
+    Runner -->|"completed/failed status"| DB
+    Runner -->|"after traffic"| Cleanup["Remove deployment containers"]
+```
+
+## One local KV iteration
+
+With Docker running, deploy the reference submission, run three five-second
+GET/PUT/DELETE traffic phases, and save every scheduled request to SQLite:
+
+```sh
+uv run python scripts/run_kv_iteration.py ./solutions/KeyValueStore/solution
+```
+
+The script starts an isolated one-shot deployment server, mounts the supplied
+`tasks/distributed-kv-k3s/environment/seed/kv.jsonl`, and checks that the
+service imported it. It uses the returned API URL and kubeconfig, then removes
+the deployment containers after traffic completes. The database and deployment
+logs are kept under the ignored `.run-data/` directory. Each run prints its
+job ID and a latency summary. `--rate`, `--duration`, `--max-in-flight`, and
+`--timeout` adjust the traffic phases; `--database` selects another SQLite
+file. The Docker daemon needs room for the 6 vCPU, 8 GiB deployment sandbox.
+The submission is mounted at `/app`, as in Harbor, with its read-only seed at
+`/seed/kv.jsonl`. The sandbox includes OpenRC, Go with a C compiler, `jq`,
+`kubectl`, and `k3d`; K3s can also be installed directly with `get.k3s.io`.
+The runner rebuilds its Docker images so local runs use the current sandbox.
+
+The first iteration covers baseline operations and latency. Fault injection,
+overload scenarios, and CPU/memory measurements are later work.
+
 A small Python library for steady traffic probes. It records the start time,
 latency, and outcome of every scheduled call.
 
 ```python
 import asyncio
-import httpx  # Install separately: pip install httpx
+import httpx
 
 from loadsim import LoadSimClient
 
