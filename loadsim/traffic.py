@@ -57,6 +57,27 @@ class LoadSimClient:
     kubernetes_url: str
     api_url: str
 
+    @classmethod
+    def from_deployment_result(cls, result: dict, artifact_dir: str | Path) -> "LoadSimClient":
+        """Create a client from the deployment server response."""
+        endpoints = result.get("endpoints")
+        artifacts = result.get("artifacts")
+        if not isinstance(endpoints, dict) or not isinstance(artifacts, dict):
+            raise ValueError("deployment response must contain endpoints and artifacts")
+        api_url, kubernetes_url = endpoints.get("api"), endpoints.get("kubernetes")
+        kubeconfig = artifacts.get("kubeconfig")
+        if (not isinstance(api_url, str) or not api_url.startswith(("http://", "https://"))
+                or not isinstance(kubernetes_url, str) or not kubernetes_url.startswith("https://")
+                or not isinstance(kubeconfig, str) or not kubeconfig.strip()):
+            raise ValueError("deployment response is missing api, kubernetes, or kubeconfig")
+        directory = Path(artifact_dir)
+        directory.mkdir(parents=True, exist_ok=True, mode=0o700)
+        directory.chmod(0o700)
+        path = directory / "kubeconfig"
+        path.write_text(kubeconfig)
+        path.chmod(0o600)
+        return cls(path, kubernetes_url, api_url)
+
     def traffic(
         self,
         operation: Operation,

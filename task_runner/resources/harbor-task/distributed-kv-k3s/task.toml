@@ -9,7 +9,6 @@ keywords = ["system-design", "kubernetes", "k3s", "distributed-systems", "key-va
 [metadata]
 category = "software-engineering"
 difficulty_explanation = "Requires a fresh K3s deployment, linearizable operations, node-loss durability, and a working HTTP API under a strict resource budget."
-source_spec = "solutions/KeyValueStore/spec.md"
 target_harness = "codex"
 
 [agent]

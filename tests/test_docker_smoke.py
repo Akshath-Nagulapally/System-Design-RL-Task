@@ -8,12 +8,14 @@ import unittest
 from pathlib import Path
 from urllib.request import urlopen
 
-from server import DeploymentService, DockerEngine
+from deployment_server.server import DeploymentService, DockerEngine
+from task_runner.submission import ensure_docker_images
 
 
 @unittest.skipUnless(os.environ.get("RUN_DOCKER_SMOKE") == "1", "set RUN_DOCKER_SMOKE=1")
 class DockerSmokeTests(unittest.TestCase):
     def test_deploy_and_reach_public_endpoint(self):
+        ensure_docker_images()
         script = """#!/bin/bash
 set -euo pipefail
 mkdir -p /tmp/site

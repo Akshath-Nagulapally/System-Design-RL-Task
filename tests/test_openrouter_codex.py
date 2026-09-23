@@ -9,7 +9,7 @@ from pathlib import Path
 from unittest.mock import AsyncMock
 
 if importlib.util.find_spec("harbor") is not None:
-    from harbor_agents.openrouter_codex import OpenRouterCodex
+    from task_runner.resources.harbor_agents.openrouter_codex import OpenRouterCodex
 else:
     OpenRouterCodex = None
 

@@ -87,6 +87,7 @@ run docker build --provenance=false -t "$API_IMAGE" .
 
 echo "Creating a three-node K3s cluster"
 run k3d cluster create "$CLUSTER_NAME" \
+  --image rancher/k3s:v1.35.5-k3s1 \
   --servers 1 --agents 2 \
   --servers-memory 2560m --agents-memory 2048m \
   --api-port '0.0.0.0:6443' \

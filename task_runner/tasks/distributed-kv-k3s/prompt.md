@@ -1,15 +1,30 @@
-# Distributed Key-Value Store
+# Distributed key-value store on K3s
 
-Build and deploy a key-value service on a local Kubernetes cluster. No cloud
-services or UI are required. You may choose the implementation and topology.
+Work in `/app`, starting from an empty project. Build and deploy a key-value
+service on a local Kubernetes cluster. No cloud services or UI are required.
+Use this fixed stack:
 
-Spinning up kubernetes cluster should also be included within our script. The technology should be standardized: K3s.
+- Implement the HTTP API and seed importer in Go 1.25.1.
+- Create the Kubernetes cluster with k3d 5.8.3 and K3s
+  `v1.35.5-k3s1` (`rancher/k3s:v1.35.5-k3s1`). The supplied kubectl is
+  v1.35.5. Select the K3s image explicitly when creating the cluster;
+  k3d's default image is different.
+- Use etcd v3.6.14 as the application key-value datastore, with the
+  Go etcd v3 client at v3.6.14. Do not use K3s's internal datastore for
+  application data.
+
+You may choose the service topology, replication layout, Go libraries other
+than the etcd client, and Kubernetes manifests, provided they meet the
+requirements below. Use `/app/deploy.sh` to orchestrate deployment.
+
+Your submission must include an executable `/app/deploy.sh` and all source
+files, manifests, and setup steps needed in a fresh sandbox. The script must
+create a local K3s cluster; the Harbor environment provides a privileged
+Docker daemon for this purpose.
 
 ## Deployment
-- The evaluation sandbox has 6 vCPU, 8 GiB RAM, and at most 3 Kubernetes
-  nodes. These limits include the cluster and all workloads.
-- `deploy.sh` must create/deploy the system, import the supplied read-only
-  `/seed/kv.jsonl`, and expose HTTP on port 8080 within 15 minutes. It must also be present in the root directory of the submission.
+- `deploy.sh` must create and deploy the system, import the supplied read-only
+  `/seed/kv.jsonl`, and expose HTTP on port 8080 within 15 minutes.
 - The same script must work in a fresh sandbox. A failed clean deployment
   receives a score of 0.
 

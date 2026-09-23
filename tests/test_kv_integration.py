@@ -13,7 +13,7 @@ from http.server import ThreadingHTTPServer
 from pathlib import Path
 from urllib.request import urlopen
 
-from server import DeploymentHandler, DeploymentService, DockerEngine
+from deployment_server.server import DeploymentHandler, DeploymentService, DockerEngine
 
 
 @unittest.skipUnless(os.environ.get("RUN_KV_SMOKE") == "1", "set RUN_KV_SMOKE=1")
