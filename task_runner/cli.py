@@ -28,7 +28,7 @@ from server import DockerEngine
 from .submission import archive_submission, ensure_docker_images
 
 
-STATE = ROOT / ".run-data"
+STATE = Path(os.environ.get("TASK_RUNNER_STATE_DIR", ROOT / ".run-data")).resolve()
 
 
 def _private_json(path: Path, value: dict) -> None:

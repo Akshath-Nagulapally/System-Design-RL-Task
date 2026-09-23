@@ -59,9 +59,13 @@ script exits, including on failure. If multiple deployments are active, pass
 `--timeout` tune the traffic. Use `uv run python -m task_runner distributed-kv-k3s
 cleanup ID` if a run was interrupted before loadsim.
 
+Set `TASK_RUNNER_STATE_DIR` to keep job state and SQLite data in another
+directory; its default is `.run-data/`.
+
 The original `scripts/run_kv_iteration.py` remains available for existing
 one-command runs and historical SQLite data. Fault injection and CPU/memory
 measurements are later work.
 
-Run tests with `uv run python -m unittest discover -s tests`. Set
-`RUN_DOCKER_SMOKE=1` to include the Docker deployment smoke test.
+Run unit tests with `uv run python -m unittest discover -s tests`. Run the
+reference deployment and loadsim test against real Docker with
+`RUN_DOCKER_SMOKE=1 uv run python -m unittest discover -s tests -p test_task_runner_docker.py`.

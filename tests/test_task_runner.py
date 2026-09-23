@@ -3,7 +3,10 @@
 from __future__ import annotations
 
 import json
+import os
 import sqlite3
+import subprocess
+import sys
 import tempfile
 import threading
 import unittest
@@ -122,6 +125,39 @@ class TaskRunnerTests(unittest.TestCase):
             output = cli.generate(self.task, state=self.state, env_file=key_file,
                                   model="example/model", agent="example:Agent")
         self.assertTrue((output / "deploy.sh").is_file())
+        self.assertEqual(len(list((self.state / "generations").glob("*/generation.json"))), 1)
+
+    def test_generate_command_hands_off_to_harbor_in_another_process(self):
+        fake_bin = Path(self.temp.name) / "bin"
+        fake_bin.mkdir()
+        fake_harbor = fake_bin / "harbor"
+        fake_harbor.write_text(
+            f"#!{sys.executable}\n"
+            "import pathlib, sys\n"
+            "args = sys.argv\n"
+            "staged = pathlib.Path(args[args.index('-p') + 1])\n"
+            "assert (staged / 'instruction.md').is_file()\n"
+            "assert not (staged / '.env').exists()\n"
+            "jobs = pathlib.Path(args[args.index('--jobs-dir') + 1])\n"
+            "name = args[args.index('--job-name') + 1]\n"
+            "output = jobs / name / 'trial' / 'artifacts' / 'app'\n"
+            "output.mkdir(parents=True)\n"
+            "(output / 'deploy.sh').write_text('#!/bin/sh\\n')\n"
+        )
+        fake_harbor.chmod(0o755)
+        key_file = Path(self.temp.name) / ".env"
+        key_file.write_text("OPENROUTER_API_KEY=dummy\n")
+        environment = os.environ.copy()
+        environment["PATH"] = str(fake_bin) + os.pathsep + environment["PATH"]
+        environment["TASK_RUNNER_STATE_DIR"] = str(self.state)
+        result = subprocess.run(
+            [sys.executable, "-m", "task_runner", self.task.name, "generate",
+             "--env-file", str(key_file)], cwd=cli.ROOT, env=environment,
+            capture_output=True, text=True, timeout=15,
+        )
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        output = json.loads(result.stdout.split("\n", 1)[1])
+        self.assertTrue((Path(output["submission_path"]) / "deploy.sh").is_file())
         self.assertEqual(len(list((self.state / "generations").glob("*/generation.json"))), 1)
 
     def test_deploy_then_loadsim_persists_samples_and_cleans_up(self):
