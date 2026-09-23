@@ -127,6 +127,7 @@ class TaskRunnerTests(unittest.TestCase):
             self.assertEqual(command[command.index("--agent-import-path") + 1], "example:Agent")
             staged = Path(command[command.index("-p") + 1])
             self.assertEqual((staged / "instruction.md").read_text(), self.task.prompt.read_text())
+            self.assertFalse((staged / "environment" / "spec.md").exists())
             self.assertFalse((staged / ".env").exists())
             jobs_dir = Path(command[command.index("--jobs-dir") + 1])
             job_name = command[command.index("--job-name") + 1]
@@ -151,6 +152,7 @@ class TaskRunnerTests(unittest.TestCase):
             "args = sys.argv\n"
             "staged = pathlib.Path(args[args.index('-p') + 1])\n"
             "assert (staged / 'instruction.md').is_file()\n"
+            "assert not (staged / 'environment' / 'spec.md').exists()\n"
             "assert not (staged / '.env').exists()\n"
             "jobs = pathlib.Path(args[args.index('--jobs-dir') + 1])\n"
             "name = args[args.index('--job-name') + 1]\n"

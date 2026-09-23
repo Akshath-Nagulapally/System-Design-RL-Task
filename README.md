@@ -14,8 +14,7 @@ task_runner/
     ├── harbor-task/distributed-kv-k3s/
     └── solutions/KeyValueStore/
         ├── solution/
-        ├── glm53-generated/
-        └── spec.md
+        └── glm53-generated/
 ```
 
 The task runner and loadsim run on this machine; the deployment server starts
@@ -55,7 +54,10 @@ uv run python -m task_runner distributed-kv-k3s deploy /path/to/generated/submis
 uv run python -m task_runner distributed-kv-k3s loadsim
 ```
 
-`generate` uses the model and Codex harness in the manifest. It requires a
+Each task's `prompt.md` contains its complete requirements. During `generate`,
+the runner copies it to Harbor's required `instruction.md`; no separate spec
+is sent to the model or copied into its environment. `generate` uses the model
+and Codex harness in the manifest. It requires a
 gitignored `task_runner/resources/harbor-task/distributed-kv-k3s/.env` containing
 `OPENROUTER_API_KEY=...`; `--model`, `--agent`, and `--env-file` override its
 defaults. It prints the generated submission path. Harbor logs and generation

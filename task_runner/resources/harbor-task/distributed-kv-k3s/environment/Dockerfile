@@ -36,6 +36,5 @@ RUN set -eux; \
 ENV DOCKER_TLS_CERTDIR=""
 WORKDIR /app
 
-COPY spec.md /app/spec.md
 COPY seed/kv.jsonl /seed/kv.jsonl
-RUN chmod 0444 /app/spec.md /seed/kv.jsonl
+RUN chmod 0444 /seed/kv.jsonl

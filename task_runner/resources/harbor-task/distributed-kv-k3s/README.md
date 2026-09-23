@@ -1,9 +1,10 @@
 # Distributed KV Harbor task
 
-The task runner stages this Harbor task and copies
-`task_runner/tasks/distributed-kv-k3s/prompt.md` to Harbor's `instruction.md` before a
-generation. The agent sees `/app/spec.md` and a read-only seed at
-`/seed/kv.jsonl`. Its deliverable is an executable `/app/deploy.sh` and all
+The task runner stages this Harbor task and copies the complete task prompt
+from `task_runner/tasks/distributed-kv-k3s/prompt.md` to Harbor's
+`instruction.md` before generation. That is the sole task instruction the
+agent receives. The environment supplies only a read-only seed at
+`/seed/kv.jsonl`. The deliverable is an executable `/app/deploy.sh` and all
 files needed for a fresh deployment.
 
 From the repository root, put `OPENROUTER_API_KEY=...` in this directory's
