@@ -38,7 +38,10 @@ class OpenRouterCodexTests(unittest.IsolatedAsyncioTestCase):
         commands = [call.kwargs["command"] for call in agent.exec_as_agent.call_args_list]
         self.assertEqual(environment.uploaded_path, "/tmp/codex-openrouter.key")
         self.assertEqual(environment.uploaded_contents, "test-key-only")
-        self.assertEqual(agent.exec_as_root.call_args.kwargs["command"], "openrc default")
+        startup = agent.exec_as_root.call_args.kwargs["command"]
+        self.assertIn("dockerd-entrypoint.sh", startup)
+        self.assertIn("docker info", startup)
+        self.assertIn("openrc default", startup)
         self.assertIn('model_provider = "openrouter"', commands[0])
         self.assertIn('wire_api = "responses"', commands[0])
         self.assertIn("--model z-ai/glm-5", commands[1])

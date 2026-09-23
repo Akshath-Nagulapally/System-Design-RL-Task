@@ -38,9 +38,17 @@ class OpenRouterCodex(Codex):
             await environment.upload_file(local_key, key_path)
 
         try:
-            # Match the deployment sandbox's OpenRC initialization before an
-            # agent tries a fresh K3s install in this privileged environment.
-            await self.exec_as_root(environment, command="openrc default")
+            # Harbor keeps its Docker environment alive with `sleep infinity`,
+            # bypassing the dind image's normal daemon entrypoint.
+            await self.exec_as_root(
+                environment,
+                command=(
+                    "dockerd-entrypoint.sh >/tmp/dockerd.log 2>&1 </dev/null & "
+                    "for i in $(seq 1 60); do "
+                    "docker info >/dev/null 2>&1 && break; sleep 1; done; "
+                    "docker info >/dev/null 2>&1 && openrc default"
+                ),
+            )
             if environment.default_user is not None:
                 await self.exec_as_root(
                     environment,
