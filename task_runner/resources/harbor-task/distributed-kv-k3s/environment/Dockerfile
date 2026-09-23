@@ -3,7 +3,7 @@ FROM golang:1.25.1-alpine3.22 AS go
 FROM docker:28.0.4-dind
 
 ARG K3D_VERSION=v5.8.3
-ARG KUBECTL_VERSION=v1.33.4
+ARG KUBECTL_VERSION=v1.35.5
 
 RUN apk add --no-cache \
     bash \

@@ -1,6 +1,6 @@
 module kvreference
 
-go 1.25.0
+go 1.25.1
 
 require go.etcd.io/etcd/client/v3 v3.6.14
 

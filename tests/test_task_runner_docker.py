@@ -44,6 +44,20 @@ class TaskRunnerDockerTests(unittest.TestCase):
                     self.assertEqual(reply.status, 200)
                 self.assertEqual(subprocess.run(["docker", "inspect", f"sandbox-{deployment_id}"],
                                                 capture_output=True).returncode, 0)
+                sandbox = f"sandbox-{deployment_id}"
+                version = subprocess.run(
+                    ["docker", "exec", sandbox, "kubectl", "--kubeconfig",
+                     "/deploy-output/kubeconfig", "get", "--raw", "/version"],
+                    capture_output=True, text=True, timeout=15, check=True,
+                )
+                self.assertEqual(json.loads(version.stdout)["gitVersion"], "v1.35.5+k3s1")
+                etcd_image = subprocess.run(
+                    ["docker", "exec", sandbox, "kubectl", "--kubeconfig",
+                     "/deploy-output/kubeconfig", "-n", "kvstore", "get", "statefulset", "etcd",
+                     "-o", "jsonpath={.spec.template.spec.containers[0].image}"],
+                    capture_output=True, text=True, timeout=15, check=True,
+                )
+                self.assertEqual(etcd_image.stdout, "gcr.io/etcd-development/etcd:v3.6.14")
 
                 loaded = subprocess.run(
                     command + ["loadsim", "--job-id", job_id, "--rate", "20",
