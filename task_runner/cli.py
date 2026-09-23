@@ -26,6 +26,7 @@ sys.path.insert(0, str(ROOT))
 from loadsim import RunRecorder
 from deployment_server.server import DockerEngine
 from .submission import archive_submission, ensure_docker_images
+from .prompt import compose_instruction
 
 
 STATE = Path(os.environ.get("TASK_RUNNER_STATE_DIR", ROOT / ".run-data")).resolve()
@@ -40,6 +41,19 @@ def _private_json(path: Path, value: dict) -> None:
     temporary.replace(path)
 
 
+def _env_value(path: Path, key: str) -> str:
+    if not path.is_file():
+        raise ValueError(f"env file missing: {path}")
+    matches = []
+    for line in path.read_text().splitlines():
+        stripped = line.strip()
+        if stripped.startswith(key + "="):
+            matches.append(stripped.split("=", 1)[1].strip().strip('"').strip("'"))
+    if len(matches) != 1 or not matches[0]:
+        raise ValueError(f"{key} missing or duplicated in {path}")
+    return matches[0]
+
+
 @dataclass(frozen=True)
 class Task:
     name: str
@@ -51,6 +65,9 @@ class Task:
     seed: Path
     model: str
     agent: str
+    deployment_contract: str
+    cpu_cores: int
+    memory_mb: int
 
     @classmethod
     def load(cls, name: str, root: Path = ROOT) -> "Task":
@@ -75,9 +92,18 @@ class Task:
         if not isinstance(generation, dict) or not all(isinstance(generation.get(key), str)
                                                        for key in ("model", "agent_import_path")):
             raise ValueError("task manifest requires generation.model and agent_import_path")
+        contract = manifest.get("deployment_contract", "digitalocean-k3s-v1")
+        if contract != "digitalocean-k3s-v1":
+            raise ValueError("unsupported deployment contract")
+        limits = manifest.get("resource_limits", {"cpu_cores": 6, "memory_mb": 8192})
+        if (not isinstance(limits, dict) or set(limits) != {"cpu_cores", "memory_mb"}
+                or any(type(limits[key]) is not int or limits[key] <= 0
+                       for key in ("cpu_cores", "memory_mb"))):
+            raise ValueError("resource_limits requires positive cpu_cores and memory_mb integers")
         return cls(name, directory, path("solution_repository", folder=True), path("prompt"),
                    path("loadsim_script"), path("harbor_task", folder=True), path("seed"),
-                   generation["model"], generation["agent_import_path"])
+                   generation["model"], generation["agent_import_path"], contract,
+                   limits["cpu_cores"], limits["memory_mb"])
 
 
 def _job_dir(job_id: str, state: Path = STATE) -> Path:
@@ -113,16 +139,20 @@ def generate(task: Task, *, state: Path = STATE, model: str | None = None,
     work.chmod(0o700)
     staged = work / "harbor-task"
     shutil.copytree(task.harbor, staged, ignore=shutil.ignore_patterns(".env", "__pycache__"))
-    shutil.copy2(task.prompt, staged / "instruction.md")
-    key_file = env_file or task.harbor / ".env"
-    if not key_file.is_file():
-        raise ValueError(f"OpenRouter env file missing: {key_file}")
+    (staged / "instruction.md").write_text(
+        compose_instruction(task.prompt, task.deployment_contract, task.cpu_cores, task.memory_mb)
+    )
+    key_file = env_file or ROOT / ".env"
+    openrouter_key = _env_value(key_file, "OPENROUTER_API_KEY")
+    harbor_env = work / "harbor.env"
+    harbor_env.write_text(f"OPENROUTER_API_KEY={openrouter_key}\n")
+    harbor_env.chmod(0o600)
     jobs_dir = state / "harbor-jobs"
     jobs_dir.mkdir(parents=True, exist_ok=True, mode=0o700)
     job_name = f"gen-{generation_id}"
     command = ["harbor", "run", "-p", str(staged), "-e", "docker",
                "--agent-import-path", agent or task.agent, "-m", model or task.model,
-               "--env-file", str(key_file), "--disable-verification", "--artifact", "/app",
+               "--env-file", str(harbor_env), "--disable-verification", "--artifact", "/app",
                "--jobs-dir", str(jobs_dir), "--job-name", job_name, "--n-concurrent", "1"]
     environment = os.environ.copy()
     environment["PYTHONPATH"] = str(ROOT) + os.pathsep + environment.get("PYTHONPATH", "")
@@ -162,6 +192,15 @@ def _start_server(job: dict, task: Task, state: Path = STATE) -> None:
                         "DEPLOY_BIND_PORT": str(port), "DEPLOY_SERVER_TOKEN": token,
                         "DEPLOY_INPUT_MOUNTS": json.dumps([{"source": str(task.seed),
                                                               "target": "/seed/kv.jsonl"}])})
+    backend = os.environ.get("TASK_DEPLOY_BACKEND", "digitalocean")
+    if backend not in ("digitalocean", "docker"):
+        raise ValueError(f"unsupported deployment backend: {backend}")
+    job["backend"] = backend
+    environment["DEPLOY_BACKEND"] = backend
+    if backend == "digitalocean":
+        environment["DEPLOY_DO_TOKEN"] = _env_value(ROOT / ".env", "DIGITAL_OCEAN_API_KEY")
+        environment["DEPLOY_SEED_PATH"] = str(task.seed)
+        environment["DEPLOY_DO_REGION"] = os.environ.get("TASK_DEPLOY_REGION", "nyc3")
     log = (directory / "server.log").open("w")
     try:
         process = subprocess.Popen([sys.executable, "-m", "task_runner.server_process", job["id"]],
@@ -220,7 +259,13 @@ def _cleanup_containers(job: dict, state: Path = STATE) -> None:
 
 def cleanup(job: dict, *, state: Path = STATE, recorder: RunRecorder | None = None) -> None:
     try:
-        _cleanup_containers(job, state)
+        if job.get("backend") == "digitalocean":
+            with httpx.Client(timeout=960) as http:
+                response = http.delete(job["server_url"] + "/deployment",
+                    headers={"Authorization": f"Bearer {job['server_token']}"})
+                response.raise_for_status()
+        else:
+            _cleanup_containers(job, state)
     finally:
         _stop_server(job)
     if job["status"] in ("deploying", "deployed", "running"):
@@ -239,12 +284,16 @@ def deploy(task: Task, submission: Path | None = None, *, state: Path = STATE) -
     recorder.create_job(job["id"], task.name, str(submission))
     _save_job(job, state)
     try:
-        ensure_docker_images()
+        ensure_docker_images(4 if os.environ.get("TASK_DEPLOY_BACKEND", "digitalocean") == "digitalocean" else 8)
         _start_server(job, task, state)
         with httpx.Client(timeout=960) as http:
             response = http.post(job["server_url"] + "/deploy", content=archive,
                                  headers={"Content-Type": "application/gzip",
-                                          "Authorization": f"Bearer {job['server_token']}"})
+                                          "Authorization": f"Bearer {job['server_token']}",
+                                          "X-Resource-Limits": json.dumps({
+                                              "cpu_cores": task.cpu_cores,
+                                              "memory_mb": task.memory_mb,
+                                          })})
             response.raise_for_status()
             result = response.json()
         # Validate the handoff before considering the deployment usable.
@@ -291,6 +340,9 @@ def loadsim(task: Task, *, job_id: str | None = None, state: Path = STATE,
                             "TASK_SEED_PATH": str(task.seed), "TASK_RATE": str(rate),
                             "TASK_DURATION": str(duration), "TASK_MAX_IN_FLIGHT": str(max_in_flight),
                             "TASK_TIMEOUT": str(timeout)})
+        if job.get("backend") == "digitalocean":
+            environment["TASK_CRASH_URL"] = job["server_url"] + "/crash"
+            environment["TASK_CRASH_TOKEN"] = job["server_token"]
         # run_path keeps the task directory off sys.path, where loadsim.py would
         # otherwise shadow the installed loadsim package.
         completed = subprocess.run(

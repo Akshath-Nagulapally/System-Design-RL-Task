@@ -5,7 +5,7 @@ FROM docker:28.0.4-dind
 ARG K3D_VERSION=v5.8.3
 ARG KUBECTL_VERSION=v1.35.5
 
-RUN apk add --no-cache bash build-base busybox-extras coreutils curl iproute2 jq openrc ca-certificates
+RUN apk add --no-cache bash build-base busybox-extras coreutils curl iproute2 jq openrc ca-certificates openssh-client
 COPY --from=go /usr/local/go /usr/local/go
 ENV PATH="/usr/local/go/bin:${PATH}"
 

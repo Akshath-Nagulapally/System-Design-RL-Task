@@ -24,12 +24,13 @@ class TaskRunnerDockerTests(unittest.TestCase):
             state = Path(temporary) / "state"
             environment = os.environ.copy()
             environment["TASK_RUNNER_STATE_DIR"] = str(state)
+            environment["TASK_DEPLOY_BACKEND"] = "docker"
             command = [sys.executable, "-m", "task_runner", TASK]
             job_id: str | None = None
             deployment_id: str | None = None
 
             try:
-                deployed = subprocess.run(command + ["deploy"], cwd=ROOT, env=environment,
+                deployed = subprocess.run(command + ["deploy", "task_runner/resources/solutions/KeyValueStore/solution"], cwd=ROOT, env=environment,
                                           capture_output=True, text=True, timeout=1200)
                 self.assertEqual(deployed.returncode, 0, deployed.stdout + deployed.stderr)
                 handoff = json.loads(deployed.stdout)
