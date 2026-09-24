@@ -1,101 +1,142 @@
 #!/usr/bin/env bash
-set -Eeuo pipefail
+set -euo pipefail
 
-ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-cd "$ROOT_DIR"
-: "${DEPLOY_OUTPUT_DIR:?}"
-: "${DEPLOY_TERRAFORM_OUTPUTS:?}"
-: "${DEPLOY_SSH_PRIVATE_KEY:?}"
-SEED_FILE="${KV_SEED_FILE:-/seed/kv.jsonl}"
-[[ -r "$SEED_FILE" ]] || { echo 'seed file is not readable' >&2; exit 1; }
-for tool in jq ssh scp go docker kubectl curl timeout; do
-  command -v "$tool" >/dev/null || { echo "missing $tool" >&2; exit 1; }
-done
-SERVER_IP="$(jq -er '.server_ip.value' "$DEPLOY_TERRAFORM_OUTPUTS")"
-LB_IP="$(jq -er '.loadbalancer_ip.value' "$DEPLOY_TERRAFORM_OUTPUTS")"
-mapfile -t NODE_IPS < <(jq -er '.droplet_ips.value[]' "$DEPLOY_TERRAFORM_OUTPUTS")
-[[ "${#NODE_IPS[@]}" -eq 5 ]] || { echo 'reference deployment needs five Droplets' >&2; exit 1; }
-SSH_OPTS=(-i "$DEPLOY_SSH_PRIVATE_KEY" -o BatchMode=yes -o StrictHostKeyChecking=accept-new
-  -o "UserKnownHostsFile=$DEPLOY_OUTPUT_DIR/known_hosts" -o ConnectTimeout=5)
-PORT_FORWARD_PID=""
-cleanup() {
-  if [[ -n "$PORT_FORWARD_PID" ]]; then
-    kill "$PORT_FORWARD_PID" 2>/dev/null || true
-    wait "$PORT_FORWARD_PID" 2>/dev/null || true
+cd /app
+: "${DEPLOY_TERRAFORM_OUTPUTS:?missing Terraform outputs}"
+: "${DEPLOY_SSH_PRIVATE_KEY:?missing SSH key}"
+: "${DEPLOY_OUTPUT_DIR:?missing output directory}"
+: "${KV_SEED_FILE:?missing seed file}"
+
+mkdir -p "$DEPLOY_OUTPUT_DIR"
+rm -f "$DEPLOY_OUTPUT_DIR/result.json"
+OUTPUTS="$DEPLOY_TERRAFORM_OUTPUTS"
+KEY="$DEPLOY_SSH_PRIVATE_KEY"
+OUT="$DEPLOY_OUTPUT_DIR"
+mapfile -t PUBLIC_IPS < <(jq -r '.droplet_ips.value[]' "$OUTPUTS")
+mapfile -t PRIVATE_IPS < <(jq -r '.private_ips.value[]' "$OUTPUTS")
+LB_IP=$(jq -er '.loadbalancer_ip.value' "$OUTPUTS")
+TOKEN=$(jq -er '.k3s_token.value' "$OUTPUTS")
+[[ ${#PUBLIC_IPS[@]} -eq 3 && ${#PRIVATE_IPS[@]} -eq 3 ]] || { echo "expected three droplets" >&2; exit 1; }
+TOKEN_B64=$(printf %s "$TOKEN" | base64 | tr -d '\n')
+unset TOKEN
+SSH_OPTIONS=(-i "$KEY" -o BatchMode=yes -o ConnectTimeout=5 -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -o LogLevel=ERROR)
+KUBECONFIG="$OUT/kubeconfig"
+export KUBECONFIG
+
+on_error() {
+  echo "Deployment failed; diagnostic logs follow:" >&2
+  if [[ -f "$KUBECONFIG" ]]; then
+    kubectl -n kv get pods -o wide >&2 || true
+    kubectl -n kv get events --sort-by=.lastTimestamp >&2 || true
   fi
 }
-trap cleanup EXIT
+trap on_error ERR
 
-for ip in "${NODE_IPS[@]}"; do
-  ready=0
-  for _ in $(seq 1 60); do
-    if ssh "${SSH_OPTS[@]}" "root@$ip" 'cloud-init status --wait >/dev/null && test -x /usr/local/bin/k3s' </dev/null; then
-      ready=1
+for ip in "${PUBLIC_IPS[@]}"; do
+  echo "Waiting for SSH on $ip"
+  ready=false
+  for attempt in $(seq 1 90); do
+    if ssh "${SSH_OPTIONS[@]}" "root@$ip" true 2>/dev/null; then
+      ready=true
       break
     fi
     sleep 3
   done
-  [[ "$ready" -eq 1 ]] || { echo "K3s node $ip did not become ready" >&2; exit 1; }
+  [[ $ready == true ]] || { echo "SSH unavailable on $ip" >&2; exit 1; }
 done
 
-ssh "${SSH_OPTS[@]}" "root@$SERVER_IP" 'cat /etc/rancher/k3s/k3s.yaml' > "$DEPLOY_OUTPUT_DIR/kubeconfig.local"
-sed "s#server: https://127.0.0.1:6443#server: https://$SERVER_IP:6443#" \
-  "$DEPLOY_OUTPUT_DIR/kubeconfig.local" > "$DEPLOY_OUTPUT_DIR/kubeconfig"
-chmod 600 "$DEPLOY_OUTPUT_DIR/kubeconfig"
-rm "$DEPLOY_OUTPUT_DIR/kubeconfig.local"
-export KUBECONFIG="$DEPLOY_OUTPUT_DIR/kubeconfig"
-kubectl wait --for=condition=Ready nodes --all --timeout=180s
-kubectl -n kube-system patch deployment coredns --type=strategic -p '{"spec":{"template":{"spec":{"affinity":{"podAntiAffinity":{"requiredDuringSchedulingIgnoredDuringExecution":[{"labelSelector":{"matchLabels":{"k8s-app":"kube-dns"}},"topologyKey":"kubernetes.io/hostname"}]}}}}}}'
-kubectl -n kube-system scale deployment coredns --replicas=5
-kubectl -n kube-system rollout status deployment/coredns --timeout=180s
+printf 'Building API image concurrently with K3s installation\n'
+docker build --platform linux/amd64 -t docker.io/library/kv-api:local . > "$OUT/build.log" 2>&1 &
+BUILD_PID=$!
 
-mkdir -p bin
-GOMAXPROCS=2 CGO_ENABLED=0 GOOS=linux GOARCH=amd64 \
-  go build -p 2 -trimpath -ldflags='-s -w' -o bin/kvstore ./cmd/kvstore
-docker build --platform linux/amd64 --provenance=false -t kv-reference-api:1 .
-docker save -o "$DEPLOY_OUTPUT_DIR/kv-api.tar" kv-reference-api:1
-for ip in "${NODE_IPS[@]}"; do
-  scp "${SSH_OPTS[@]}" "$DEPLOY_OUTPUT_DIR/kv-api.tar" "root@$ip:/tmp/kv-api.tar"
-  ssh "${SSH_OPTS[@]}" "root@$ip" 'k3s ctr images import /tmp/kv-api.tar && rm /tmp/kv-api.tar'
-done
-rm "$DEPLOY_OUTPUT_DIR/kv-api.tar"
+install_node() {
+  local index="$1" mode="$2"
+  echo "Installing K3s on ${PUBLIC_IPS[index]} ($mode)"
+  ssh "${SSH_OPTIONS[@]}" "root@${PUBLIC_IPS[index]}" \
+    "bash -s -- '${PRIVATE_IPS[index]}' '${PRIVATE_IPS[0]}' '${PUBLIC_IPS[index]}' '$LB_IP' '$TOKEN_B64' '$mode'" <<'REMOTE'
+set -euo pipefail
+private_ip=$1
+server_ip=$2
+public_ip=$3
+lb_ip=$4
+token=$(printf %s "$5" | base64 -d)
+mode=$6
+interface=$(ip -o -4 addr show | awk -v address="$private_ip" 'index($4, address "/") == 1 {print $2; exit}')
+[[ -n "$interface" ]] || { echo "private interface missing for $private_ip" >&2; exit 1; }
+options=(server --node-ip "$private_ip" --node-external-ip "$public_ip" --advertise-address "$private_ip" --flannel-iface "$interface" --tls-san "$lb_ip" --tls-san "$public_ip" --disable traefik --disable servicelb --disable metrics-server)
+if [[ $mode == initial ]]; then
+  options+=(--cluster-init)
+else
+  options+=(--server "https://$server_ip:6443")
+fi
+curl -sfL https://get.k3s.io | INSTALL_K3S_VERSION='v1.35.5+k3s1' K3S_TOKEN="$token" sh -s - "${options[@]}"
+REMOTE
+}
 
-kubectl create namespace kvstore
-kubectl apply -f manifests/etcd.yaml
-kubectl -n kvstore rollout status statefulset/etcd --timeout=360s
-kubectl apply -f manifests/api.yaml
-kubectl -n kvstore rollout status deployment/kv-api --timeout=180s
+install_node 0 initial
+install_node 1 join > "$OUT/install-1.log" 2>&1 &
+INSTALL_ONE=$!
+install_node 2 join > "$OUT/install-2.log" 2>&1 &
+INSTALL_TWO=$!
+wait "$INSTALL_ONE" || { cat "$OUT/install-1.log" >&2; exit 1; }
+wait "$INSTALL_TWO" || { cat "$OUT/install-2.log" >&2; exit 1; }
 
-kubectl -n kvstore port-forward --address 127.0.0.1 svc/etcd-client 2379:2379 \
-  > "$DEPLOY_OUTPUT_DIR/port-forward.log" 2>&1 &
-PORT_FORWARD_PID=$!
-for _ in $(seq 1 30); do
-  if grep -q 'Forwarding from 127.0.0.1:2379' "$DEPLOY_OUTPUT_DIR/port-forward.log"; then break; fi
-  kill -0 "$PORT_FORWARD_PID" 2>/dev/null || { cat "$DEPLOY_OUTPUT_DIR/port-forward.log" >&2; exit 1; }
-  sleep 1
-done
-ETCD_ENDPOINTS=127.0.0.1:2379 ./bin/kvstore import "$SEED_FILE"
-kill "$PORT_FORWARD_PID" 2>/dev/null || true
-wait "$PORT_FORWARD_PID" 2>/dev/null || true
-PORT_FORWARD_PID=""
+ssh "${SSH_OPTIONS[@]}" "root@${PUBLIC_IPS[0]}" cat /etc/rancher/k3s/k3s.yaml \
+  | sed "s/127\.0\.0\.1/${PUBLIC_IPS[0]}/g" > "$KUBECONFIG"
+chmod 600 "$KUBECONFIG"
 
-for _ in $(seq 1 60); do
-  if curl -fsS --max-time 3 "http://$LB_IP/healthz" >/dev/null; then break; fi
+for attempt in $(seq 1 90); do
+  if [[ $(kubectl get nodes --no-headers 2>/dev/null | wc -l) -eq 3 ]]; then
+    break
+  fi
   sleep 2
 done
-curl -fsS --max-time 5 "http://$LB_IP/healthz" >/dev/null
-kubectl get --raw=/readyz >/dev/null
-awk -v lb="$LB_IP" -v tls="$SERVER_IP" '
-  /server: https:\/\// {
-    sub(/https:\/\/[^:]+:6443/, "https://" lb ":6443")
-    print
-    print "    tls-server-name: " tls
-    next
-  }
-  { print }
-' "$DEPLOY_OUTPUT_DIR/kubeconfig" > "$DEPLOY_OUTPUT_DIR/kubeconfig.ha"
-mv "$DEPLOY_OUTPUT_DIR/kubeconfig.ha" "$DEPLOY_OUTPUT_DIR/kubeconfig"
-chmod 600 "$DEPLOY_OUTPUT_DIR/kubeconfig"
-kubectl get --raw=/readyz >/dev/null
-printf '{"endpoints":[{"name":"api","url":"http://%s"},{"name":"kubernetes","url":"https://%s:6443"}],"artifacts":[{"name":"kubeconfig","path":"kubeconfig"}]}\n' \
-  "$LB_IP" "$LB_IP" > "$DEPLOY_OUTPUT_DIR/result.json"
+kubectl wait --for=condition=Ready nodes --all --timeout=180s
+[[ $(kubectl get nodes --no-headers | wc -l) -eq 3 ]] || { echo "three nodes did not join" >&2; exit 1; }
+core_dns_patch=$(kubectl -n kube-system get deployment/coredns -o json | jq -c '{spec:{replicas:3,template:{spec:{affinity:{podAntiAffinity:{requiredDuringSchedulingIgnoredDuringExecution:[{labelSelector:.spec.selector,topologyKey:"kubernetes.io/hostname"}]}}}}}}')
+kubectl -n kube-system patch deployment/coredns --type=merge -p "$core_dns_patch"
+kubectl -n kube-system rollout status deployment/coredns --timeout=120s
+
+if ! wait "$BUILD_PID"; then
+  cat "$OUT/build.log" >&2
+  exit 1
+fi
+echo "Distributing API image"
+IMAGE_TAR="$OUT/image.tar"
+docker save -o "$IMAGE_TAR" docker.io/library/kv-api:local
+for ip in "${PUBLIC_IPS[@]}"; do
+  ssh "${SSH_OPTIONS[@]}" "root@$ip" 'k3s ctr -n k8s.io images import -' < "$IMAGE_TAR" > /dev/null
+done
+rm -f "$IMAGE_TAR"
+
+kubectl apply -f k8s/kv.yaml
+kubectl -n kv rollout status statefulset/etcd --timeout=360s
+kubectl -n kv rollout status daemonset/kv-api --timeout=180s
+
+api_pod=$(kubectl -n kv get pod -l app=kv-api -o jsonpath='{.items[0].metadata.name}')
+[[ -n $api_pod ]] || { echo "no API pod" >&2; exit 1; }
+echo "Importing seed"
+seed_key=$(awk 'NF {print; exit}' "$KV_SEED_FILE" | jq -er '.key')
+kubectl -n kv exec -i "$api_pod" -- /kv import < "$KV_SEED_FILE"
+
+ready=false
+for attempt in $(seq 1 60); do
+  if curl --fail --silent --max-time 3 "http://$LB_IP/healthz" > /dev/null && \
+     curl --fail --silent --max-time 3 "http://$LB_IP/v1/kv/$seed_key" > /dev/null; then
+    ready=true
+    break
+  fi
+  sleep 2
+done
+[[ $ready == true ]] || { echo "external API did not become ready" >&2; exit 1; }
+
+sed -i "s/${PUBLIC_IPS[0]}/$LB_IP/g" "$KUBECONFIG"
+
+jq -n --arg api "http://$LB_IP" --arg kube "https://$LB_IP:6443" '{
+  endpoints: [
+    {name: "api", scheme: "http", url: $api},
+    {name: "kubernetes", scheme: "https", url: $kube}
+  ],
+  artifacts: [{name: "kubeconfig", path: "kubeconfig"}]
+}' > "$OUT/result.json"
+echo "Deployment ready at http://$LB_IP"

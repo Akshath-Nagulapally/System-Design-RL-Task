@@ -1,4 +1,4 @@
-module kvreference
+module kvservice
 
 go 1.25.1
 

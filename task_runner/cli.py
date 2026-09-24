@@ -6,6 +6,7 @@ import argparse
 import json
 import math
 import os
+import re
 import secrets
 import shutil
 import signal
@@ -129,6 +130,21 @@ def _active_job(task_name: str, state: Path = STATE) -> dict:
     if len(matches) != 1:
         raise ValueError(f"expected one active deployment for {task_name}, found {len(matches)}; pass --job-id")
     return matches[0]
+
+
+def new_task(name: str, *, from_task: str, root: Path = ROOT) -> Path:
+    """Clone task-owned files while retaining the source task's shared resources."""
+    if not re.fullmatch(r"[a-z][a-z0-9-]*", name):
+        raise ValueError("task name must use lowercase letters, digits, and hyphens")
+    target = root / "task_runner" / "tasks" / name
+    if target.exists():
+        raise ValueError(f"task already exists: {name}")
+    source = Task.load(from_task, root)
+    shutil.copytree(source.directory, target,
+                    ignore=shutil.ignore_patterns("__pycache__", "*.pyc"))
+    print(json.dumps({"task": name, "task_directory": str(target),
+                      "cloned_from": from_task}, indent=2))
+    return target
 
 
 def generate(task: Task, *, state: Path = STATE, model: str | None = None,
@@ -368,6 +384,19 @@ def loadsim(task: Task, *, job_id: str | None = None, state: Path = STATE,
 
 
 def main(argv: list[str] | None = None) -> int:
+    argv = list(sys.argv[1:] if argv is None else argv)
+    if argv and argv[0] == "new-task":
+        setup = argparse.ArgumentParser(prog="python -m task_runner new-task",
+                                        description="Clone an existing task as a starting point")
+        setup.add_argument("name")
+        setup.add_argument("--from", dest="from_task", required=True)
+        options = setup.parse_args(argv[1:])
+        try:
+            new_task(options.name, from_task=options.from_task)
+        except (OSError, ValueError) as exc:
+            print(f"task-runner: {exc}", file=sys.stderr)
+            return 1
+        return 0
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("task", help="task name under task_runner/tasks/")
     commands = parser.add_subparsers(dest="command", required=True)
@@ -375,6 +404,14 @@ def main(argv: list[str] | None = None) -> int:
     generate_parser.add_argument("--model")
     generate_parser.add_argument("--agent")
     generate_parser.add_argument("--env-file", type=Path)
+    run_parser = commands.add_parser("run", help="generate, deploy, and stress-test one submission")
+    run_parser.add_argument("--model")
+    run_parser.add_argument("--agent")
+    run_parser.add_argument("--env-file", type=Path)
+    run_parser.add_argument("--rate", type=float, default=100)
+    run_parser.add_argument("--duration", type=float, default=30)
+    run_parser.add_argument("--max-in-flight", type=int, default=200)
+    run_parser.add_argument("--timeout", type=float, default=5)
     deploy_parser = commands.add_parser("deploy")
     deploy_parser.add_argument("submission", nargs="?", type=Path)
     loadsim_parser = commands.add_parser("loadsim")
@@ -383,6 +420,8 @@ def main(argv: list[str] | None = None) -> int:
     loadsim_parser.add_argument("--duration", type=float, default=5)
     loadsim_parser.add_argument("--max-in-flight", type=int, default=20)
     loadsim_parser.add_argument("--timeout", type=float, default=5)
+    results_parser = commands.add_parser("results", help="print recorded SQLite results")
+    results_parser.add_argument("job_id")
     cleanup_parser = commands.add_parser("cleanup")
     cleanup_parser.add_argument("job_id")
     args = parser.parse_args(argv)
@@ -390,11 +429,25 @@ def main(argv: list[str] | None = None) -> int:
         task = Task.load(args.task)
         if args.command in ("generate", "generate_agent_solution"):
             generate(task, model=args.model, agent=args.agent, env_file=args.env_file)
+        elif args.command == "run":
+            submission = generate(task, model=args.model, agent=args.agent, env_file=args.env_file)
+            job_id = deploy(task, submission)
+            loadsim(task, job_id=job_id, rate=args.rate, duration=args.duration,
+                    max_in_flight=args.max_in_flight, timeout=args.timeout)
         elif args.command == "deploy":
             deploy(task, args.submission)
         elif args.command == "loadsim":
             loadsim(task, job_id=args.job_id, rate=args.rate, duration=args.duration,
                     max_in_flight=args.max_in_flight, timeout=args.timeout)
+        elif args.command == "results":
+            job = _load_job(args.job_id, STATE)
+            if job["task_name"] != task.name:
+                raise ValueError("job belongs to another task")
+            recorder = RunRecorder(STATE / "task-runner.sqlite3")
+            try:
+                print(json.dumps(recorder.summary(job["id"]), indent=2))
+            finally:
+                recorder.close()
         else:
             job = _load_job(args.job_id)
             if job["task_name"] != task.name:
