@@ -115,7 +115,7 @@ class TaskRunnerTests(unittest.TestCase):
         self.assertEqual(self.task.harbor, cli.ROOT / "task_runner/resources/harbor-task/distributed-kv-k3s")
         self.assertEqual(self.task.agent, "task_runner.resources.harbor_agents.openrouter_codex:OpenRouterCodex")
         self.assertEqual(self.task.seed.read_text().splitlines()[0], '{"key":"welcome","value":"hello"}')
-        self.assertEqual((self.task.cpu_cores, self.task.memory_mb), (6, 8192))
+        self.assertEqual((self.task.cpu_cores, self.task.memory_mb), (10, 20480))
         with self.assertRaisesRegex(ValueError, "unknown task"):
             cli.Task.load("../../task_runner")
 
@@ -131,7 +131,7 @@ class TaskRunnerTests(unittest.TestCase):
             self.assertTrue(instruction.startswith(self.task.prompt.read_text().rstrip()))
             self.assertEqual(instruction.count("# DigitalOcean deployment contract"), 1)
             self.assertEqual(instruction.count("# Resource budget"), 1)
-            self.assertIn("6 virtual CPU cores and 8192 MB", instruction)
+            self.assertIn("10 virtual CPU cores and 20480 MB", instruction)
             harbor_env = Path(command[command.index("--env-file") + 1]).read_text()
             self.assertEqual(harbor_env, "OPENROUTER_API_KEY=dummy\n")
             self.assertFalse((staged / "environment" / "spec.md").exists())

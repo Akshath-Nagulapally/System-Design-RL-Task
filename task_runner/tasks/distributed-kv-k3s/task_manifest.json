@@ -7,8 +7,8 @@
   "seed": "../../resources/harbor-task/distributed-kv-k3s/environment/seed/kv.jsonl",
   "deployment_contract": "digitalocean-k3s-v1",
   "resource_limits": {
-    "cpu_cores": 6,
-    "memory_mb": 8192
+    "cpu_cores": 10,
+    "memory_mb": 20480
   },
   "generation": {
     "model": "z-ai/glm-5.3",

@@ -95,7 +95,7 @@ class Task:
         contract = manifest.get("deployment_contract", "digitalocean-k3s-v1")
         if contract != "digitalocean-k3s-v1":
             raise ValueError("unsupported deployment contract")
-        limits = manifest.get("resource_limits", {"cpu_cores": 6, "memory_mb": 8192})
+        limits = manifest.get("resource_limits", {"cpu_cores": 10, "memory_mb": 20480})
         if (not isinstance(limits, dict) or set(limits) != {"cpu_cores", "memory_mb"}
                 or any(type(limits[key]) is not int or limits[key] <= 0
                        for key in ("cpu_cores", "memory_mb"))):
