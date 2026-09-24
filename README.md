@@ -28,22 +28,56 @@ least 4 GiB for the cloud deployment script sandbox. The DigitalOcean token
 needs read/create/delete permissions for Projects, Droplets, VPCs, SSH keys,
 and firewalls, plus project resource assignment and size lookup.
 
-## Commands
+## Run a GLM 5.3 submission
+
+Run these commands from the repository root:
+
+1. Generate a submission with Harbor. The task manifest selects `z-ai/glm-5.3`
+   by default. Copy the `submission_path` printed by this command.
+
+   ```sh
+   uv run python -m task_runner distributed-kv-k3s generate
+   ```
+
+2. Deploy that generated submission. Replace the example path with the exact
+   `submission_path` from step 1. The command prints a `job_id` when deployment
+   succeeds.
+
+   ```sh
+   uv run python -m task_runner distributed-kv-k3s deploy "/absolute/path/from/submission_path"
+   ```
+
+3. Run the task's load simulator against the deployment. With exactly one active
+   deployment for this task, the job ID is optional. Pass `--job-id JOB_ID` to
+   select a particular deployment when several are active.
+
+   ```sh
+   uv run python -m task_runner distributed-kv-k3s loadsim
+   ```
+
+The loadsim command does **not** take a submission path or a loadsim file path.
+`task_runner/tasks/distributed-kv-k3s/task_manifest.json` selects
+`./loadsim.py` in that same task directory. That script checks the deployed KV
+API, sends GET traffic, then PUT traffic, requests deletion of 50% of the job's
+remaining Droplets (rounded down, minimum one), and finally sends DELETE
+traffic. The defaults are 10 requests per second for 5 seconds **per phase**;
+use `--rate`, `--duration`, `--max-in-flight`, and `--timeout` to change them.
+Results are recorded in SQLite under `.run-data/`. The current defaults are a
+short functional probe, not a sustained high-load benchmark.
+
+`deploy` leaves cloud resources running until `loadsim` finishes. `loadsim`
+cleans them up even if the traffic script fails. If a run is interrupted before
+cleanup, run:
 
 ```sh
-uv run python -m task_runner distributed-kv-k3s generate
-uv run python -m task_runner distributed-kv-k3s deploy /path/to/submission
-uv run python -m task_runner distributed-kv-k3s loadsim --job-id JOB_ID
 uv run python -m task_runner distributed-kv-k3s cleanup JOB_ID
 ```
 
-Omit the submission path to deploy the Terraform reference solution. `deploy`
-leaves the cloud service running; `loadsim` runs GET and PUT traffic, crashes
-one random job Droplet, runs DELETE traffic, and cleans up
-afterward. `cleanup` is available if the run is interrupted. Project deletion
-follows Terraform destroy. Job state and logs live under ignored `.run-data/`.
-A rejected over-budget plan receives HTTP 422 with a zero score indicator and
-is never applied.
+To deploy the Terraform reference solution instead of a generated submission,
+omit the submission path from `deploy`. Project deletion follows Terraform
+destroy. Job state and logs live under ignored `.run-data/`. A rejected
+over-budget plan receives HTTP 422 with a zero score indicator and is never
+applied.
 
 Set `TASK_DEPLOY_REGION` to choose another DigitalOcean region. Set
 `TASK_RUNNER_STATE_DIR` for another local state directory. For the older local
