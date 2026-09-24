@@ -404,6 +404,14 @@ def main(argv: list[str] | None = None) -> int:
     generate_parser.add_argument("--model")
     generate_parser.add_argument("--agent")
     generate_parser.add_argument("--env-file", type=Path)
+    run_parser = commands.add_parser("run", help="generate, deploy, and stress-test one submission")
+    run_parser.add_argument("--model")
+    run_parser.add_argument("--agent")
+    run_parser.add_argument("--env-file", type=Path)
+    run_parser.add_argument("--rate", type=float, default=100)
+    run_parser.add_argument("--duration", type=float, default=30)
+    run_parser.add_argument("--max-in-flight", type=int, default=200)
+    run_parser.add_argument("--timeout", type=float, default=5)
     deploy_parser = commands.add_parser("deploy")
     deploy_parser.add_argument("submission", nargs="?", type=Path)
     loadsim_parser = commands.add_parser("loadsim")
@@ -412,6 +420,8 @@ def main(argv: list[str] | None = None) -> int:
     loadsim_parser.add_argument("--duration", type=float, default=5)
     loadsim_parser.add_argument("--max-in-flight", type=int, default=20)
     loadsim_parser.add_argument("--timeout", type=float, default=5)
+    results_parser = commands.add_parser("results", help="print recorded SQLite results")
+    results_parser.add_argument("job_id")
     cleanup_parser = commands.add_parser("cleanup")
     cleanup_parser.add_argument("job_id")
     args = parser.parse_args(argv)
@@ -419,11 +429,25 @@ def main(argv: list[str] | None = None) -> int:
         task = Task.load(args.task)
         if args.command in ("generate", "generate_agent_solution"):
             generate(task, model=args.model, agent=args.agent, env_file=args.env_file)
+        elif args.command == "run":
+            submission = generate(task, model=args.model, agent=args.agent, env_file=args.env_file)
+            job_id = deploy(task, submission)
+            loadsim(task, job_id=job_id, rate=args.rate, duration=args.duration,
+                    max_in_flight=args.max_in_flight, timeout=args.timeout)
         elif args.command == "deploy":
             deploy(task, args.submission)
         elif args.command == "loadsim":
             loadsim(task, job_id=args.job_id, rate=args.rate, duration=args.duration,
                     max_in_flight=args.max_in_flight, timeout=args.timeout)
+        elif args.command == "results":
+            job = _load_job(args.job_id, STATE)
+            if job["task_name"] != task.name:
+                raise ValueError("job belongs to another task")
+            recorder = RunRecorder(STATE / "task-runner.sqlite3")
+            try:
+                print(json.dumps(recorder.summary(job["id"]), indent=2))
+            finally:
+                recorder.close()
         else:
             job = _load_job(args.job_id)
             if job["task_name"] != task.name:

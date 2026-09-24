@@ -21,13 +21,77 @@ current task is a linearizable KV service on K3s.
 
 ## Credentials and prerequisites
 
-Put `DIGITAL_OCEAN_API_KEY=...` and `OPENROUTER_API_KEY=...` in the ignored root
-`.env` (mode 0600). The runner creates a filtered temporary Harbor env file
-containing only the OpenRouter key. The deployment server alone receives the
-DigitalOcean key. Install `uv`, Terraform, Docker, and Python 3.11+; give Docker at
-least 4 GiB for the cloud deployment script sandbox. The DigitalOcean token
-needs read/create/delete permissions for Projects, Droplets, VPCs, SSH keys,
-and firewalls, plus project resource assignment and size lookup.
+From the repository root, install the toolchain with one command:
+
+```sh
+bash scripts/install.sh
+```
+
+The installer supports macOS and Ubuntu. It installs or checks Docker,
+Terraform 1.16.4, `uv`, Python 3.12, the locked Python dependencies, and
+Harbor 0.5.0. It may request administrator access to install Docker or
+Homebrew. Docker Desktop requires its first-run setup and license acceptance;
+on Ubuntu, a new Docker-group membership requires signing out and back in.
+Re-run the command after completing either step. Check an existing installation
+without changing it with `bash scripts/install.sh --check`. Docker must have
+at least 4 GiB of memory available for the deployment script sandbox.
+
+Copy the credential template, restrict the file, and fill in both values
+locally:
+
+```sh
+cp .env.example .env
+chmod 600 .env
+```
+
+The runner creates a filtered temporary Harbor env file containing only the
+OpenRouter key. The deployment server alone receives the DigitalOcean key.
+The DigitalOcean token needs read/create/delete permissions for Projects,
+Droplets, VPCs, SSH keys, and firewalls, plus project resource assignment and
+size lookup. The root `.env`, generated Harbor files, Terraform state, and job
+logs are ignored by Git. Do not put credentials in the task manifest or a
+submission.
+
+**Current trust boundary:** the server runs a submitted Terraform init/plan
+with the DigitalOcean token before it validates the plan. It also runs the
+submitted `deploy.sh` in a privileged Docker container with a temporary SSH
+key. Treat model submissions as untrusted code; use an isolated, disposable
+worker and a limited cloud account rather than a shared production host.
+
+The final reward implementation is not set up currently and will be resolved
+in a future PR ([tracking issue #9](https://github.com/Akshath-Nagulapally/System-Design-RL-Task/issues/9)).
+Harbor verification is disabled; the current runner records request samples
+and fault events but does not calculate a final score.
+
+Installer sources: [uv](https://docs.astral.sh/uv/getting-started/installation/),
+[Terraform](https://developer.hashicorp.com/terraform/tutorials/aws-get-started/install-cli),
+[Docker](https://docs.docker.com/engine/install/ubuntu/), and
+[Harbor](https://github.com/harbor-framework/harbor#installation).
+
+## Reproduce a generated run
+
+After adding credentials, generate, deploy, run the 100-request/second stress
+profile, and clean up with one command:
+
+```sh
+uv run python -m task_runner distributed-kv-k3s run
+```
+
+The default model is `generation.model` in the task manifest. Override it for
+one run with `--model openai/gpt-6-sol` or another OpenRouter model ID. `run`
+prints a `job_id` and a JSON summary. Read the same stored summary later from
+SQLite with:
+
+```sh
+uv run python -m task_runner distributed-kv-k3s results JOB_ID
+```
+
+The SQLite file is `.run-data/task-runner.sqlite3`; its `jobs`,
+`request_samples`, and `fault_events` tables contain the underlying records.
+The summary's mean latency includes started requests that timed out and omits
+dropped requests, which have no measured latency. The `reports/` directory
+contains results from earlier runs, but their raw local SQLite files are not
+committed.
 
 ## Generate, deploy, and test a submission
 

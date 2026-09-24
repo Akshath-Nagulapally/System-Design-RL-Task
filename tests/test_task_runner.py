@@ -12,6 +12,7 @@ import tarfile
 import tempfile
 import threading
 import unittest
+from contextlib import redirect_stdout
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from types import SimpleNamespace
@@ -135,6 +136,26 @@ class TaskRunnerTests(unittest.TestCase):
             cli.new_task("new-task", from_task="source-task", root=root)
         with self.assertRaisesRegex(ValueError, "task name"):
             cli.new_task("../escape", from_task="source-task", root=root)
+
+    def test_run_command_uses_manifest_model_and_stress_defaults(self):
+        submission = Path(self.temp.name) / "submission"
+        with patch.object(cli.Task, "load", return_value=self.task), \
+             patch.object(cli, "generate", return_value=submission) as generate, \
+             patch.object(cli, "deploy", return_value="job123") as deploy, \
+             patch.object(cli, "loadsim") as loadsim:
+            self.assertEqual(cli.main([self.task.name, "run"]), 0)
+        generate.assert_called_once_with(self.task, model=None, agent=None, env_file=None)
+        deploy.assert_called_once_with(self.task, submission)
+        loadsim.assert_called_once_with(self.task, job_id="job123", rate=100,
+                                        duration=30, max_in_flight=200, timeout=5)
+
+    def test_results_command_reads_saved_job(self):
+        job = {"id": "abc123", "task_name": self.task.name, "status": "completed"}
+        cli._save_job(job, self.state)
+        output = io.StringIO()
+        with patch.object(cli, "STATE", self.state), redirect_stdout(output):
+            self.assertEqual(cli.main([self.task.name, "results", job["id"]]), 0)
+        self.assertEqual(json.loads(output.getvalue())["requests"], 0)
 
     def test_generation_stages_prompt_and_finds_harbor_artifact(self):
         key_file = Path(self.temp.name) / ".env"
