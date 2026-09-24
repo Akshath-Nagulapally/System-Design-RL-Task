@@ -1,5 +1,9 @@
 # Byte-compiled / optimized / DLL files
 .run-data/
+.terraform/
+*.tfstate
+*.tfstate.*
+*.tfplan
 __pycache__/
 *.py[codz]
 *$py.class

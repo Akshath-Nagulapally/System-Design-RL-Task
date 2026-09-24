@@ -120,11 +120,14 @@ def rewrite_kubeconfig(contents: str, public_url: str) -> str:
 
 class DockerEngine:
     def __init__(self, image: str, proxy_image: str, public_host: str,
-                 input_mounts: list[tuple[Path, str]] | None = None):
+                 input_mounts: list[tuple[Path, str]] | None = None,
+                 cpu_limit: str = "6", memory_limit: str = "8g"):
         self.image = image
         self.proxy_image = proxy_image
         self.public_host = public_host
         self.input_mounts = input_mounts or []
+        self.cpu_limit = cpu_limit
+        self.memory_limit = memory_limit
 
     @staticmethod
     def command(*args: str, timeout: int = 60) -> str:
@@ -139,7 +142,8 @@ class DockerEngine:
         self.command("network", "create", network)
         try:
             args = ["run", "-d", "--name", sandbox, "--network", network, "--privileged",
-                    "--cpus", "6", "--memory", "8g", "--memory-swap", "8g",
+                    "--cpus", self.cpu_limit, "--memory", self.memory_limit,
+                    "--memory-swap", self.memory_limit,
                     "--mount", f"type=bind,src={repository},dst=/app",
                     "--mount", f"type=bind,src={output},dst=/deploy-output"]
             for source, target in self.input_mounts:
@@ -158,11 +162,14 @@ class DockerEngine:
             self.cleanup(network, [sandbox])
             raise
 
-    def deploy(self, sandbox: str, log_path: Path) -> None:
+    def deploy(self, sandbox: str, log_path: Path,
+               extra_env: dict[str, str] | None = None) -> None:
         with log_path.open("w") as log:
             log_path.chmod(0o600)
+            environment = [item for pair in (extra_env or {}).items()
+                           for item in ("-e", f"{pair[0]}={pair[1]}")]
             completed = subprocess.run(
-                ["docker", "exec", "-e", "DEPLOY_OUTPUT_DIR=/deploy-output", "-w", "/app",
+                ["docker", "exec", "-e", "DEPLOY_OUTPUT_DIR=/deploy-output", *environment, "-w", "/app",
                  sandbox, "bash", "./deploy.sh"],
                 stdout=log, stderr=subprocess.STDOUT, timeout=DEPLOY_TIMEOUT_SECONDS,
             )
@@ -209,6 +216,7 @@ class DockerEngine:
 
 
 class DeploymentService:
+    requires_budget = False
     def __init__(self, state_dir: Path, engine: DockerEngine):
         self.state_dir = state_dir
         self.engine = engine
@@ -290,6 +298,25 @@ class DeploymentHandler(BaseHTTPRequestHandler):
         self.wfile.write(body)
 
     def do_POST(self) -> None:
+        if self.path == "/crash" and self.service.requires_budget:
+            if self.token and self.headers.get("Authorization") != f"Bearer {self.token}":
+                self.respond(401, {"error": "unauthorized"})
+                return
+            try:
+                length = int(self.headers.get("Content-Length", "0"))
+                if not 0 < length <= 4096 or self.headers.get("Content-Type") != "application/json":
+                    raise ValueError("send a small JSON crash request")
+                request = json.loads(self.rfile.read(length))
+                if not isinstance(request, dict) or set(request) not in ({"count"}, {"percent"}):
+                    raise ValueError("crash request requires count or percent")
+                result = self.service.crash(**request)
+                self.respond(200, result)
+            except (ValueError, TypeError) as exc:
+                self.respond(422, {"error": str(exc)})
+            except Exception:
+                LOG.exception("crash unsuccessful")
+                self.respond(500, {"error": "crash unsuccessful"})
+            return
         if self.path != "/deploy":
             self.respond(404, {"error": "not found"})
             return
@@ -306,6 +333,15 @@ class DeploymentHandler(BaseHTTPRequestHandler):
         if not 0 < length <= MAX_ARCHIVE_BYTES or self.headers.get("Content-Type") not in ("application/gzip", "application/x-tar"):
             self.respond(400, {"error": "send a gzip repository tarball"})
             return
+        budget = None
+        if self.service.requires_budget:
+            try:
+                budget = json.loads(self.headers.get("X-Resource-Limits", ""))
+                from .resource_policy import ResourceLimits
+                ResourceLimits.parse(budget)
+            except (ValueError, TypeError):
+                self.respond(400, {"error": "valid resource limits required"})
+                return
         if not self.service.claim():
             self.respond(409, {"error": "one already provided"})
             return
@@ -313,7 +349,11 @@ class DeploymentHandler(BaseHTTPRequestHandler):
             archive = self.rfile.read(length)
             if len(archive) != length:
                 raise DeploymentError("incomplete upload")
-            self.respond(200, self.service.run(archive))
+            result = self.service.run(archive, budget) if self.service.requires_budget else self.service.run(archive)
+            self.respond(200, result)
+        except ValueError as exc:
+            LOG.warning("deployment rejected: %s", exc)
+            self.respond(422, {"error": str(exc), "score": 0})
         except Exception:
             LOG.exception("deployment unsuccessful")
             self.respond(500, {"error": "error deployment unsuccessful"})
@@ -330,6 +370,20 @@ class DeploymentHandler(BaseHTTPRequestHandler):
         else:
             self.respond(404, {"error": "not found"})
 
+    def do_DELETE(self) -> None:
+        if self.path != "/deployment" or not self.service.requires_budget:
+            self.respond(404, {"error": "not found"})
+            return
+        if self.token and self.headers.get("Authorization") != f"Bearer {self.token}":
+            self.respond(401, {"error": "unauthorized"})
+            return
+        try:
+            self.service.cleanup()
+            self.respond(200, {"status": "cleaned"})
+        except Exception:
+            LOG.exception("cloud cleanup unsuccessful")
+            self.respond(500, {"error": "cleanup unsuccessful"})
+
 
 def main() -> None:
     logging.basicConfig(level=logging.INFO)
@@ -345,10 +399,22 @@ def main() -> None:
         if not source.exists() or not target.startswith("/"):
             raise SystemExit("DEPLOY_INPUT_MOUNTS source must exist and target must be absolute")
         mounts.append((source, target))
-    engine = DockerEngine(os.environ.get("DEPLOY_SANDBOX_IMAGE", "deployment-sandbox:latest"),
-                          os.environ.get("DEPLOY_PROXY_IMAGE", "deployment-proxy:latest"),
-                          os.environ.get("DEPLOY_PUBLIC_HOST", "127.0.0.1"), mounts)
-    service = DeploymentService(state, engine)
+    backend = os.environ.get("DEPLOY_BACKEND", "docker")
+    if backend == "digitalocean":
+        from .digitalocean import DigitalOceanDeploymentService
+        token = os.environ.get("DEPLOY_DO_TOKEN")
+        seed = Path(os.environ.get("DEPLOY_SEED_PATH", ""))
+        if not token or not seed.is_file():
+            raise SystemExit("DigitalOcean backend requires token and seed path")
+        service = DigitalOceanDeploymentService(state, token,
+                                                os.environ.get("DEPLOY_DO_REGION", "nyc3"), seed)
+    elif backend == "docker":
+        engine = DockerEngine(os.environ.get("DEPLOY_SANDBOX_IMAGE", "deployment-sandbox:latest"),
+                              os.environ.get("DEPLOY_PROXY_IMAGE", "deployment-proxy:latest"),
+                              os.environ.get("DEPLOY_PUBLIC_HOST", "127.0.0.1"), mounts)
+        service = DeploymentService(state, engine)
+    else:
+        raise SystemExit(f"unsupported DEPLOY_BACKEND: {backend}")
     handler = type("ConfiguredDeploymentHandler", (DeploymentHandler,),
                    {"service": service, "token": os.environ.get("DEPLOY_SERVER_TOKEN")})
     host = os.environ.get("DEPLOY_BIND_HOST", "127.0.0.1")

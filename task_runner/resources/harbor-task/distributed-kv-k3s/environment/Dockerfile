@@ -4,6 +4,7 @@ FROM docker:28.0.4-dind
 
 ARG K3D_VERSION=v5.8.3
 ARG KUBECTL_VERSION=v1.35.5
+ARG TERRAFORM_VERSION=1.16.4
 
 RUN apk add --no-cache \
     bash \
@@ -18,6 +19,7 @@ RUN apk add --no-cache \
     openrc \
     openssl \
     tar \
+    unzip \
     util-linux
 
 COPY --from=go /usr/local/go /usr/local/go
@@ -31,6 +33,9 @@ RUN set -eux; \
     case "$(uname -m)" in x86_64) arch=amd64 ;; aarch64) arch=arm64 ;; *) exit 1 ;; esac; \
     curl -fsSL "https://github.com/k3d-io/k3d/releases/download/${K3D_VERSION}/k3d-linux-${arch}" -o /usr/local/bin/k3d; \
     curl -fsSL "https://dl.k8s.io/release/${KUBECTL_VERSION}/bin/linux/${arch}/kubectl" -o /usr/local/bin/kubectl; \
+    curl -fsSL "https://releases.hashicorp.com/terraform/${TERRAFORM_VERSION}/terraform_${TERRAFORM_VERSION}_linux_${arch}.zip" -o /tmp/terraform.zip; \
+    unzip -q /tmp/terraform.zip -d /usr/local/bin; \
+    rm /tmp/terraform.zip; \
     chmod +x /usr/local/bin/k3d /usr/local/bin/kubectl
 
 ENV DOCKER_TLS_CERTDIR=""

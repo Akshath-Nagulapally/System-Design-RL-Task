@@ -1,81 +1,52 @@
 # One-shot deployment server
 
-This server accepts one repository as a gzip tarball over `POST /deploy`. It
-runs the repository's root `deploy.sh` in a 6 vCPU, 8 GiB Docker-in-Docker
-sandbox. A second upload receives HTTP 409 with `{"error":"one already
-provided"}`, including while the first deployment is running. The claim is
-stored in `DEPLOY_STATE_DIR` and survives server restarts. A failed deployment
-receives `{"error":"error deployment unsuccessful"}`.
+The task runner starts one server per job. `POST /deploy` accepts a gzip
+submission archive once; a second upload receives HTTP 409. `GET /result`
+returns 202 while deployment runs and the saved response afterward. The API
+uses a bearer token when configured by the task runner.
 
-`deploy.sh` must write `$DEPLOY_OUTPUT_DIR/result.json` after successful
-deployment. The server forwards every declared port through a small TCP relay
-and returns public URLs by endpoint name. Files declared as artifacts are
-returned in the same JSON response. If an artifact is named `kubeconfig` and
-an endpoint is named `kubernetes`, the server updates its API address while
-preserving the original TLS certificate name.
+## DigitalOcean backend
 
-```json
-{
-  "endpoints": [
-    {"name": "api", "scheme": "http", "port": 8080},
-    {"name": "kubernetes", "scheme": "https", "port": 6443}
-  ],
-  "artifacts": [{"name": "kubeconfig", "path": "kubeconfig"}]
-}
-```
+The default task-runner backend uses a DigitalOcean token from the ignored
+repository root `.env`. The runner sends the archive with an
+`X-Resource-Limits` JSON header derived from the task manifest. The server
+creates a job Project and temporary SSH key, initializes Terraform from the
+submission's `terraform/` directory, saves a plan, and reads its JSON output.
+It sums every planned Droplet's vCPU and memory using DigitalOcean's size
+catalog. Unknown or unmeasurable compute, non-DigitalOcean providers, and
+Terraform provisioners fail validation. An over-budget plan returns HTTP 422
+and `score: 0` without applying the plan. Exact-budget plans pass.
 
-Endpoint ports must listen on the sandbox interface and remain available after
-`deploy.sh` exits. Artifact paths are relative to `DEPLOY_OUTPUT_DIR`.
+After validation the server applies that same saved plan. It then runs the
+submission's `deploy.sh` inside a 4-vCPU, 4-GiB Docker sandbox with the
+Terraform outputs, temporary SSH key, and read-only seed. The DigitalOcean
+token is not passed to the sandbox. `deploy.sh` writes
+`$DEPLOY_OUTPUT_DIR/result.json` with endpoint URLs and declared artifacts.
+The server accepts only endpoint hosts matching the deployed Droplet IPs.
 
-## Run
+`POST /crash` accepts `{"percent": 50}` or `{"count": 1}` after deployment.
+Percentage requests use the number of remaining eligible Droplets, round down,
+and remove at least one when any remain. For each request, the server randomly
+selects the calculated number of remaining Droplets from the job's Terraform
+state, verifies Project membership, deletes them through the DigitalOcean API,
+and records the selection. Control-plane Droplets are eligible. The request
+fails if fewer Droplets remain than requested. The server waits for deletion
+to be visible before returning.
 
-Requires a running Linux Docker engine or Docker Desktop, Python 3.11+, and
-enough Docker memory for the 8 GiB sandbox. Build the two images:
+`DELETE /deployment` destroys the remaining Terraform resources and then deletes the
+empty Project. The task runner invokes it after load testing and on errors.
+The Project organizes resources; Terraform state and the job ID provide the
+teardown record.
 
-```sh
-docker build -f deployment_server/Dockerfile.sandbox -t deployment-sandbox:latest .
-docker build -f deployment_server/Dockerfile.proxy -t deployment-proxy:latest .
-```
+## Local Docker backend
 
-For the KeyValueStore task, mount an existing JSONL file at `/seed/kv.jsonl`
-with `DEPLOY_INPUT_MOUNTS`. The same setting can mount other task inputs at
-other paths. Set `DEPLOY_PUBLIC_HOST` to an address the grader can reach. The default is
-`127.0.0.1`, which keeps relays local. Set `DEPLOY_BIND_HOST` and
-`DEPLOY_SERVER_TOKEN` if the upload API must be remotely accessible.
+Set `TASK_DEPLOY_BACKEND=docker` in the task runner to run the older local
+reference solution. This starts a privileged Docker-in-Docker sandbox capped
+at 6 vCPU and 8 GiB, runs `deploy.sh`, and exposes declared ports through
+proxy containers. It is retained for local regression tests.
 
-```sh
-DEPLOY_INPUT_MOUNTS='[{"source":"/absolute/path/kv.jsonl","target":"/seed/kv.jsonl"}]' \
-  uv run python -m deployment_server.server
-```
-
-In another terminal, upload the repository folder and save the response:
+Run the offline suite with:
 
 ```sh
-tar -czf /tmp/submission.tar.gz -C task_runner/resources/solutions/KeyValueStore/solution .
-curl -fsS -H 'Content-Type: application/gzip' \
-  --data-binary @/tmp/submission.tar.gz \
-  http://127.0.0.1:8000/deploy > /tmp/deployment.json
-```
-
-If the upload connection drops, `GET /result` returns `202` while the job is
-running and the saved response when it finishes. The response has
-`endpoints.api`, `endpoints.kubernetes`, and
-`artifacts.kubeconfig` for this task. For example:
-
-```sh
-python3 -c 'import json; r=json.load(open("/tmp/deployment.json")); print(r["endpoints"]); open("/tmp/kubeconfig", "w").write(r["artifacts"]["kubeconfig"])'
-kubectl --kubeconfig /tmp/kubeconfig get nodes
-```
-
-The returned kubeconfig contains cluster administrator credentials. Keep the
-deployment API and its response private. Docker-in-Docker requires a privileged
-sandbox, so run untrusted submissions on a dedicated host or VM.
-
-## Tests
-
-```sh
-uv run python -m unittest discover -s tests -v
-RUN_DOCKER_SMOKE=1 uv run python -m unittest discover -s tests -p test_docker_smoke.py -v
-RUN_KV_SMOKE=1 KV_SOLUTION_PATH=task_runner/resources/solutions/KeyValueStore/solution \
-  uv run python -m unittest discover -s tests -p test_kv_integration.py -v
+uv run python -m unittest discover -s tests
 ```

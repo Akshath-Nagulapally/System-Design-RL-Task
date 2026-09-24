@@ -24,7 +24,8 @@ def first_seed_record(path: Path) -> tuple[str, str]:
 
 async def run_traffic(client: LoadSimClient, recorder: RunRecorder, job_id: str,
                       seed_record: tuple[str, str], *, rate: float, duration: float,
-                      max_in_flight: int, timeout: float) -> None:
+                      max_in_flight: int, timeout: float,
+                      crash_url: str | None = None, crash_token: str | None = None) -> None:
     seed_key, seed_value = seed_record
     async with httpx.AsyncClient(base_url=client.api_url, timeout=timeout) as http:
         health = await http.get("/healthz")
@@ -79,6 +80,22 @@ async def run_traffic(client: LoadSimClient, recorder: RunRecorder, job_id: str,
         recorder.save_phase(job_id, "put", await client.atraffic(write_unique, **settings))
         if not keys:
             raise RuntimeError("no PUT request succeeded; cannot run DELETE traffic")
+        if crash_url:
+            if not crash_token:
+                raise RuntimeError("crash request is missing server authorization")
+            async with httpx.AsyncClient(timeout=90) as fault_http:
+                response = await fault_http.post(
+                    crash_url, json={"percent": 50},
+                    headers={"Authorization": f"Bearer {crash_token}"},
+                )
+                response.raise_for_status()
+                event = response.json()
+            removed = event.get("removed")
+            remaining = event.get("remaining")
+            if (not isinstance(removed, list) or type(remaining) is not int
+                    or len(removed) != max(1, (len(removed) + remaining) // 2)):
+                raise RuntimeError("crash did not remove half the available Droplets")
+            recorder.save_fault(job_id, "crash", event)
         delete_keys = itertools.cycle(keys)
         recorder.save_phase(job_id, "delete", await client.atraffic(delete_written, **settings))
 
@@ -95,7 +112,9 @@ def main() -> None:
                                 rate=float(os.environ["TASK_RATE"]),
                                 duration=float(os.environ["TASK_DURATION"]),
                                 max_in_flight=int(os.environ["TASK_MAX_IN_FLIGHT"]),
-                                timeout=float(os.environ["TASK_TIMEOUT"])))
+                                timeout=float(os.environ["TASK_TIMEOUT"]),
+                                crash_url=os.environ.get("TASK_CRASH_URL"),
+                                crash_token=os.environ.get("TASK_CRASH_TOKEN")))
     finally:
         recorder.close()
 

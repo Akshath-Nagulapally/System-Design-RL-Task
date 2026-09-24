@@ -111,10 +111,11 @@ class TaskRunnerTests(unittest.TestCase):
 
     def test_manifest_resolves_reference_and_rejects_escape(self):
         self.assertTrue((self.task.solution / "deploy.sh").is_file())
-        self.assertEqual(self.task.solution, cli.ROOT / "task_runner/resources/solutions/KeyValueStore/solution")
+        self.assertEqual(self.task.solution, cli.ROOT / "task_runner/resources/solutions/KeyValueStore/solution-digitalocean")
         self.assertEqual(self.task.harbor, cli.ROOT / "task_runner/resources/harbor-task/distributed-kv-k3s")
         self.assertEqual(self.task.agent, "task_runner.resources.harbor_agents.openrouter_codex:OpenRouterCodex")
         self.assertEqual(self.task.seed.read_text().splitlines()[0], '{"key":"welcome","value":"hello"}')
+        self.assertEqual((self.task.cpu_cores, self.task.memory_mb), (10, 20480))
         with self.assertRaisesRegex(ValueError, "unknown task"):
             cli.Task.load("../../task_runner")
 
@@ -126,7 +127,13 @@ class TaskRunnerTests(unittest.TestCase):
             self.assertEqual(command[command.index("-m") + 1], "example/model")
             self.assertEqual(command[command.index("--agent-import-path") + 1], "example:Agent")
             staged = Path(command[command.index("-p") + 1])
-            self.assertEqual((staged / "instruction.md").read_text(), self.task.prompt.read_text())
+            instruction = (staged / "instruction.md").read_text()
+            self.assertTrue(instruction.startswith(self.task.prompt.read_text().rstrip()))
+            self.assertEqual(instruction.count("# DigitalOcean deployment contract"), 1)
+            self.assertEqual(instruction.count("# Resource budget"), 1)
+            self.assertIn("10 virtual CPU cores and 20480 MB", instruction)
+            harbor_env = Path(command[command.index("--env-file") + 1]).read_text()
+            self.assertEqual(harbor_env, "OPENROUTER_API_KEY=dummy\n")
             self.assertFalse((staged / "environment" / "spec.md").exists())
             self.assertFalse((staged / ".env").exists())
             jobs_dir = Path(command[command.index("--jobs-dir") + 1])
@@ -300,7 +307,8 @@ class TaskRunnerTests(unittest.TestCase):
 
     def test_job_scoped_server_survives_start_call_and_stops(self):
         job = {"id": "a" * 32, "task_name": self.task.name, "status": "deploying"}
-        cli._start_server(job, self.task, self.state)
+        with patch.dict(os.environ, {"TASK_DEPLOY_BACKEND": "docker"}):
+            cli._start_server(job, self.task, self.state)
         try:
             self.assertEqual(httpx.get(job["server_url"] + "/healthz").status_code, 200)
             self.assertEqual(cli._load_job(job["id"], self.state)["server_pid"], job["server_pid"])

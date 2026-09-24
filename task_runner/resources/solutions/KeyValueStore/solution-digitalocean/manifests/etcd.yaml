@@ -1,0 +1,122 @@
+apiVersion: v1
+kind: Service
+metadata:
+  name: etcd
+  namespace: kvstore
+spec:
+  clusterIP: None
+  publishNotReadyAddresses: true
+  selector:
+    app: etcd
+  ports:
+    - name: client
+      port: 2379
+    - name: peer
+      port: 2380
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: etcd-client
+  namespace: kvstore
+spec:
+  selector:
+    app: etcd
+  ports:
+    - name: client
+      port: 2379
+      targetPort: 2379
+---
+apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  name: etcd
+  namespace: kvstore
+spec:
+  serviceName: etcd
+  replicas: 5
+  podManagementPolicy: Parallel
+  selector:
+    matchLabels:
+      app: etcd
+  template:
+    metadata:
+      labels:
+        app: etcd
+    spec:
+      terminationGracePeriodSeconds: 30
+      affinity:
+        podAntiAffinity:
+          requiredDuringSchedulingIgnoredDuringExecution:
+            - labelSelector:
+                matchLabels:
+                  app: etcd
+              topologyKey: kubernetes.io/hostname
+      containers:
+        - name: etcd
+          image: gcr.io/etcd-development/etcd:v3.6.14
+          imagePullPolicy: IfNotPresent
+          command: ["/usr/local/bin/etcd"]
+          args:
+            - --name=$(POD_NAME)
+            - --data-dir=/data
+            - --listen-peer-urls=http://0.0.0.0:2380
+            - --listen-client-urls=http://0.0.0.0:2379
+            - --initial-advertise-peer-urls=http://$(POD_NAME).etcd.kvstore.svc.cluster.local:2380
+            - --advertise-client-urls=http://$(POD_NAME).etcd.kvstore.svc.cluster.local:2379
+            - --initial-cluster=etcd-0=http://etcd-0.etcd.kvstore.svc.cluster.local:2380,etcd-1=http://etcd-1.etcd.kvstore.svc.cluster.local:2380,etcd-2=http://etcd-2.etcd.kvstore.svc.cluster.local:2380,etcd-3=http://etcd-3.etcd.kvstore.svc.cluster.local:2380,etcd-4=http://etcd-4.etcd.kvstore.svc.cluster.local:2380
+            - --initial-cluster-state=new
+            - --initial-cluster-token=kvstore-reference
+            - --listen-metrics-urls=http://0.0.0.0:2381
+            - --auto-compaction-mode=revision
+            - --auto-compaction-retention=10000
+          env:
+            - name: POD_NAME
+              valueFrom:
+                fieldRef:
+                  fieldPath: metadata.name
+          ports:
+            - name: client
+              containerPort: 2379
+            - name: peer
+              containerPort: 2380
+            - name: metrics
+              containerPort: 2381
+          startupProbe:
+            httpGet:
+              path: /readyz
+              port: metrics
+            periodSeconds: 5
+            failureThreshold: 36
+          readinessProbe:
+            httpGet:
+              path: /readyz
+              port: metrics
+            periodSeconds: 5
+            timeoutSeconds: 3
+          livenessProbe:
+            httpGet:
+              path: /livez
+              port: metrics
+            periodSeconds: 10
+            timeoutSeconds: 3
+            failureThreshold: 6
+          resources:
+            requests:
+              cpu: 200m
+              memory: 256Mi
+            limits:
+              cpu: "1"
+              memory: 768Mi
+          volumeMounts:
+            - name: data
+              mountPath: /data
+  volumeClaimTemplates:
+    - metadata:
+        name: data
+      spec:
+        accessModes: ["ReadWriteOnce"]
+        storageClassName: local-path
+        resources:
+          requests:
+            storage: 2Gi

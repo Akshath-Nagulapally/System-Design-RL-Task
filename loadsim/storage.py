@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import sqlite3
+import json
 from datetime import datetime, timezone
 from pathlib import Path
 
@@ -45,6 +46,13 @@ class RunRecorder:
                 UNIQUE(job_id, phase, sequence)
             );
             CREATE INDEX IF NOT EXISTS request_samples_job_id ON request_samples(job_id);
+            CREATE TABLE IF NOT EXISTS fault_events (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                job_id TEXT NOT NULL REFERENCES jobs(id),
+                happened_at TEXT NOT NULL,
+                kind TEXT NOT NULL,
+                details_json TEXT NOT NULL
+            );
         """)
 
     def close(self) -> None:
@@ -78,6 +86,13 @@ class RunRecorder:
                   sample.outcome, sample.error) for sample in result.samples),
             )
 
+    def save_fault(self, job_id: str, kind: str, details: dict) -> None:
+        with self.connection:
+            self.connection.execute(
+                "INSERT INTO fault_events (job_id, happened_at, kind, details_json) VALUES (?, ?, ?, ?)",
+                (job_id, utc_now(), kind, json.dumps(details)),
+            )
+
     def summary(self, job_id: str) -> dict:
         count, successes, failures, dropped, average = self.connection.execute(
             "SELECT COUNT(*), "
@@ -86,6 +101,21 @@ class RunRecorder:
             "SUM(CASE WHEN outcome = 'dropped' THEN 1 ELSE 0 END), AVG(latency_ms) "
             "FROM request_samples WHERE job_id = ?", (job_id,),
         ).fetchone()
+        phases = {}
+        for phase, phase_requests, phase_successes, phase_failures, phase_dropped, latency in self.connection.execute(
+            "SELECT phase, COUNT(*), "
+            "SUM(CASE WHEN outcome = 'success' THEN 1 ELSE 0 END), "
+            "SUM(CASE WHEN outcome IN ('error', 'timeout') THEN 1 ELSE 0 END), "
+            "SUM(CASE WHEN outcome = 'dropped' THEN 1 ELSE 0 END), AVG(latency_ms) "
+            "FROM request_samples WHERE job_id = ? GROUP BY phase", (job_id,),
+        ):
+            phases[phase] = {"requests": phase_requests, "successes": phase_successes or 0,
+                             "failures": phase_failures or 0, "dropped": phase_dropped or 0,
+                             "average_latency_ms": latency}
+        faults = [{"kind": kind, "happened_at": happened_at, "details": json.loads(details)}
+                  for kind, happened_at, details in self.connection.execute(
+                      "SELECT kind, happened_at, details_json FROM fault_events WHERE job_id = ? ORDER BY id",
+                      (job_id,))]
         return {"job_id": job_id, "requests": count, "successes": successes or 0,
                 "failures": failures or 0, "dropped": dropped or 0,
-                "average_latency_ms": average}
+                "average_latency_ms": average, "phases": phases, "faults": faults}

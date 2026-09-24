@@ -1,0 +1,237 @@
+apiVersion: v1
+kind: Service
+metadata:
+  name: etcd-headless
+  namespace: kv
+spec:
+  clusterIP: None
+  publishNotReadyAddresses: true
+  selector:
+    app.kubernetes.io/name: etcd
+  ports:
+    - name: client
+      port: 2379
+    - name: peer
+      port: 2380
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: etcd
+  namespace: kv
+spec:
+  selector:
+    app.kubernetes.io/name: etcd
+  ports:
+    - name: client
+      port: 2379
+      targetPort: 2379
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: etcd-0
+  namespace: kv
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: etcd
+      app.kubernetes.io/instance: etcd-0
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: etcd
+        app.kubernetes.io/instance: etcd-0
+    spec:
+      nodeSelector:
+        kubernetes.io/hostname: kv-k3s-0
+      subdomain: etcd-headless
+      hostname: etcd-0
+      containers:
+        - name: etcd
+          image: gcr.io/etcd-development/etcd:v3.6.14
+          imagePullPolicy: IfNotPresent
+          command:
+            - /bin/sh
+            - -ec
+            - |
+              exec /usr/local/bin/etcd \
+                --name=etcd-0 \
+                --data-dir=/var/lib/etcd \
+                --listen-client-urls=http://0.0.0.0:2379 \
+                --advertise-client-urls=http://etcd-0.etcd-headless.kv.svc:2379 \
+                --listen-peer-urls=http://0.0.0.0:2380 \
+                --initial-advertise-peer-urls=http://etcd-0.etcd-headless.kv.svc:2380 \
+                --initial-cluster=etcd-0=http://etcd-0.etcd-headless.kv.svc:2380,etcd-1=http://etcd-1.etcd-headless.kv.svc:2380,etcd-2=http://etcd-2.etcd-headless.kv.svc:2380 \
+                --initial-cluster-token=application-kv \
+                --initial-cluster-state=new \
+                --log-level=info
+          resources:
+            requests:
+              cpu: 500m
+              memory: 512Mi
+            limits:
+              cpu: "1"
+              memory: 768Mi
+          readinessProbe:
+            tcpSocket:
+              port: 2379
+            initialDelaySeconds: 5
+            periodSeconds: 5
+          livenessProbe:
+            tcpSocket:
+              port: 2379
+            initialDelaySeconds: 15
+            periodSeconds: 10
+          volumeMounts:
+            - name: data
+              mountPath: /var/lib/etcd
+      volumes:
+        - name: data
+          hostPath:
+            path: /var/lib/kv-etcd
+            type: DirectoryOrCreate
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: etcd-1
+  namespace: kv
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: etcd
+      app.kubernetes.io/instance: etcd-1
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: etcd
+        app.kubernetes.io/instance: etcd-1
+    spec:
+      nodeSelector:
+        kubernetes.io/hostname: kv-k3s-1
+      subdomain: etcd-headless
+      hostname: etcd-1
+      containers:
+        - name: etcd
+          image: gcr.io/etcd-development/etcd:v3.6.14
+          imagePullPolicy: IfNotPresent
+          command:
+            - /bin/sh
+            - -ec
+            - |
+              exec /usr/local/bin/etcd \
+                --name=etcd-1 \
+                --data-dir=/var/lib/etcd \
+                --listen-client-urls=http://0.0.0.0:2379 \
+                --advertise-client-urls=http://etcd-1.etcd-headless.kv.svc:2379 \
+                --listen-peer-urls=http://0.0.0.0:2380 \
+                --initial-advertise-peer-urls=http://etcd-1.etcd-headless.kv.svc:2380 \
+                --initial-cluster=etcd-0=http://etcd-0.etcd-headless.kv.svc:2380,etcd-1=http://etcd-1.etcd-headless.kv.svc:2380,etcd-2=http://etcd-2.etcd-headless.kv.svc:2380 \
+                --initial-cluster-token=application-kv \
+                --initial-cluster-state=new \
+                --log-level=info
+          resources:
+            requests:
+              cpu: 500m
+              memory: 512Mi
+            limits:
+              cpu: "1"
+              memory: 768Mi
+          readinessProbe:
+            tcpSocket:
+              port: 2379
+            initialDelaySeconds: 5
+            periodSeconds: 5
+          livenessProbe:
+            tcpSocket:
+              port: 2379
+            initialDelaySeconds: 15
+            periodSeconds: 10
+          volumeMounts:
+            - name: data
+              mountPath: /var/lib/etcd
+      volumes:
+        - name: data
+          hostPath:
+            path: /var/lib/kv-etcd
+            type: DirectoryOrCreate
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: etcd-2
+  namespace: kv
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: etcd
+      app.kubernetes.io/instance: etcd-2
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: etcd
+        app.kubernetes.io/instance: etcd-2
+    spec:
+      nodeSelector:
+        kubernetes.io/hostname: kv-k3s-2
+      subdomain: etcd-headless
+      hostname: etcd-2
+      containers:
+        - name: etcd
+          image: gcr.io/etcd-development/etcd:v3.6.14
+          imagePullPolicy: IfNotPresent
+          command:
+            - /bin/sh
+            - -ec
+            - |
+              exec /usr/local/bin/etcd \
+                --name=etcd-2 \
+                --data-dir=/var/lib/etcd \
+                --listen-client-urls=http://0.0.0.0:2379 \
+                --advertise-client-urls=http://etcd-2.etcd-headless.kv.svc:2379 \
+                --listen-peer-urls=http://0.0.0.0:2380 \
+                --initial-advertise-peer-urls=http://etcd-2.etcd-headless.kv.svc:2380 \
+                --initial-cluster=etcd-0=http://etcd-0.etcd-headless.kv.svc:2380,etcd-1=http://etcd-1.etcd-headless.kv.svc:2380,etcd-2=http://etcd-2.etcd-headless.kv.svc:2380 \
+                --initial-cluster-token=application-kv \
+                --initial-cluster-state=new \
+                --log-level=info
+          resources:
+            requests:
+              cpu: 500m
+              memory: 512Mi
+            limits:
+              cpu: "1"
+              memory: 768Mi
+          readinessProbe:
+            tcpSocket:
+              port: 2379
+            initialDelaySeconds: 5
+            periodSeconds: 5
+          livenessProbe:
+            tcpSocket:
+              port: 2379
+            initialDelaySeconds: 15
+            periodSeconds: 10
+          volumeMounts:
+            - name: data
+              mountPath: /var/lib/etcd
+      volumes:
+        - name: data
+          hostPath:
+            path: /var/lib/kv-etcd
+            type: DirectoryOrCreate
+---
+apiVersion: policy/v1
+kind: PodDisruptionBudget
+metadata:
+  name: etcd
+  namespace: kv
+spec:
+  minAvailable: 2
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: etcd

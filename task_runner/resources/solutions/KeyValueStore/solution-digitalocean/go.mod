@@ -1,4 +1,4 @@
-module example.com/kv
+module kvreference
 
 go 1.25.1
 
