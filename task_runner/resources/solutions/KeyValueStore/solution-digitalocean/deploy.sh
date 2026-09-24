@@ -12,8 +12,9 @@ for tool in jq ssh scp go docker kubectl curl timeout; do
   command -v "$tool" >/dev/null || { echo "missing $tool" >&2; exit 1; }
 done
 SERVER_IP="$(jq -er '.server_ip.value' "$DEPLOY_TERRAFORM_OUTPUTS")"
+LB_IP="$(jq -er '.loadbalancer_ip.value' "$DEPLOY_TERRAFORM_OUTPUTS")"
 mapfile -t NODE_IPS < <(jq -er '.droplet_ips.value[]' "$DEPLOY_TERRAFORM_OUTPUTS")
-[[ "${#NODE_IPS[@]}" -ge 3 ]] || { echo 'reference deployment needs three Droplets' >&2; exit 1; }
+[[ "${#NODE_IPS[@]}" -eq 5 ]] || { echo 'reference deployment needs five Droplets' >&2; exit 1; }
 SSH_OPTS=(-i "$DEPLOY_SSH_PRIVATE_KEY" -o BatchMode=yes -o StrictHostKeyChecking=accept-new
   -o "UserKnownHostsFile=$DEPLOY_OUTPUT_DIR/known_hosts" -o ConnectTimeout=5)
 PORT_FORWARD_PID=""
@@ -44,6 +45,9 @@ chmod 600 "$DEPLOY_OUTPUT_DIR/kubeconfig"
 rm "$DEPLOY_OUTPUT_DIR/kubeconfig.local"
 export KUBECONFIG="$DEPLOY_OUTPUT_DIR/kubeconfig"
 kubectl wait --for=condition=Ready nodes --all --timeout=180s
+kubectl -n kube-system patch deployment coredns --type=strategic -p '{"spec":{"template":{"spec":{"affinity":{"podAntiAffinity":{"requiredDuringSchedulingIgnoredDuringExecution":[{"labelSelector":{"matchLabels":{"k8s-app":"kube-dns"}},"topologyKey":"kubernetes.io/hostname"}]}}}}}}'
+kubectl -n kube-system scale deployment coredns --replicas=5
+kubectl -n kube-system rollout status deployment/coredns --timeout=180s
 
 mkdir -p bin
 GOMAXPROCS=2 CGO_ENABLED=0 GOOS=linux GOARCH=amd64 \
@@ -58,7 +62,7 @@ rm "$DEPLOY_OUTPUT_DIR/kv-api.tar"
 
 kubectl create namespace kvstore
 kubectl apply -f manifests/etcd.yaml
-kubectl -n kvstore rollout status statefulset/etcd --timeout=240s
+kubectl -n kvstore rollout status statefulset/etcd --timeout=360s
 kubectl apply -f manifests/api.yaml
 kubectl -n kvstore rollout status deployment/kv-api --timeout=180s
 
@@ -76,10 +80,22 @@ wait "$PORT_FORWARD_PID" 2>/dev/null || true
 PORT_FORWARD_PID=""
 
 for _ in $(seq 1 60); do
-  if curl -fsS --max-time 3 "http://$SERVER_IP/healthz" >/dev/null; then break; fi
+  if curl -fsS --max-time 3 "http://$LB_IP/healthz" >/dev/null; then break; fi
   sleep 2
 done
-curl -fsS --max-time 5 "http://$SERVER_IP/healthz" >/dev/null
+curl -fsS --max-time 5 "http://$LB_IP/healthz" >/dev/null
+kubectl get --raw=/readyz >/dev/null
+awk -v lb="$LB_IP" -v tls="$SERVER_IP" '
+  /server: https:\/\// {
+    sub(/https:\/\/[^:]+:6443/, "https://" lb ":6443")
+    print
+    print "    tls-server-name: " tls
+    next
+  }
+  { print }
+' "$DEPLOY_OUTPUT_DIR/kubeconfig" > "$DEPLOY_OUTPUT_DIR/kubeconfig.ha"
+mv "$DEPLOY_OUTPUT_DIR/kubeconfig.ha" "$DEPLOY_OUTPUT_DIR/kubeconfig"
+chmod 600 "$DEPLOY_OUTPUT_DIR/kubeconfig"
 kubectl get --raw=/readyz >/dev/null
 printf '{"endpoints":[{"name":"api","url":"http://%s"},{"name":"kubernetes","url":"https://%s:6443"}],"artifacts":[{"name":"kubeconfig","path":"kubeconfig"}]}\n' \
-  "$SERVER_IP" "$SERVER_IP" > "$DEPLOY_OUTPUT_DIR/result.json"
+  "$LB_IP" "$LB_IP" > "$DEPLOY_OUTPUT_DIR/result.json"

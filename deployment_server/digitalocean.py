@@ -87,17 +87,20 @@ class DigitalOceanAPI:
     def delete_project(self, project_id: str) -> None:
         self.request("DELETE", f"/projects/{project_id}")
 
-    def project_droplet_urns(self, project_id: str) -> set[str]:
+    def project_resource_urns(self, project_id: str) -> set[str]:
         urns: set[str] = set()
         page = 1
         while True:
             response = self.request("GET", f"/projects/{project_id}/resources?per_page=200&page={page}")
             urns.update(resource["urn"] for resource in response.get("resources", [])
-                        if isinstance(resource.get("urn"), str) and
-                        resource["urn"].startswith("do:droplet:"))
+                        if isinstance(resource.get("urn"), str))
             if not response.get("links", {}).get("pages", {}).get("next"):
                 return urns
             page += 1
+
+    def project_droplet_urns(self, project_id: str) -> set[str]:
+        return {urn for urn in self.project_resource_urns(project_id)
+                if urn.startswith("do:droplet:")}
 
     def delete_droplet(self, droplet_id: int) -> None:
         self.request("DELETE", f"/droplets/{droplet_id}")
@@ -117,6 +120,18 @@ def _resource_values(module: dict):
         yield resource
     for child in module.get("child_modules", []):
         yield from _resource_values(child)
+
+
+def _endpoint_ips(outputs: dict, state: dict, project_id: str,
+                  project_urns: set[str]) -> set[str]:
+    allowed = set(outputs["droplet_ips"]["value"])
+    for resource in _resource_values(state.get("values", {}).get("root_module", {})):
+        if resource.get("type") == "digitalocean_loadbalancer":
+            values = resource.get("values", {})
+            if ((values.get("project_id") == project_id or values.get("urn") in project_urns)
+                    and isinstance(values.get("ip"), str)):
+                allowed.add(values["ip"])
+    return allowed
 
 
 def _result(output: Path, allowed_ips: set[str]) -> dict:
@@ -255,7 +270,8 @@ class DigitalOceanDeploymentService(DeploymentService):
                 })
             finally:
                 engine.cleanup(network, [sandbox])
-            allowed_ips = set(json.loads(outputs)["droplet_ips"]["value"])
+            allowed_ips = _endpoint_ips(json.loads(outputs), state, project_id,
+                                        self.api.project_resource_urns(project_id))
             response = _result(output, allowed_ips)
             response_file = job_dir / "response.json"
             response_file.write_text(json.dumps(response))

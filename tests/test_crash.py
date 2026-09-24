@@ -5,7 +5,7 @@ import tempfile
 import unittest
 from pathlib import Path
 
-from deployment_server.digitalocean import DigitalOceanDeploymentService
+from deployment_server.digitalocean import DigitalOceanDeploymentService, _endpoint_ips
 
 
 class FakeDigitalOceanAPI:
@@ -81,3 +81,14 @@ class CrashTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "either crash count or percent"):
             self.service.crash(1, percent=50)
         self.assertEqual(self.service.api.deleted, [])
+
+    def test_only_job_load_balancer_ip_is_an_allowed_endpoint(self):
+        outputs = {"droplet_ips": {"value": ["192.0.2.10"]}}
+        state = {"values": {"root_module": {"resources": [
+            {"type": "digitalocean_loadbalancer", "values": {
+                "urn": "do:loadbalancer:owned", "ip": "192.0.2.20"}},
+            {"type": "digitalocean_loadbalancer", "values": {
+                "urn": "do:loadbalancer:foreign", "ip": "192.0.2.30"}},
+        ]}}}
+        self.assertEqual(_endpoint_ips(outputs, state, "project-a", {"do:loadbalancer:owned"}),
+                         {"192.0.2.10", "192.0.2.20"})

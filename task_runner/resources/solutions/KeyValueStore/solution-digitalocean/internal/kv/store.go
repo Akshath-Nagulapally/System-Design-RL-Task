@@ -2,6 +2,7 @@ package kv
 
 import (
 	"context"
+	"net"
 	"strings"
 	"time"
 
@@ -31,7 +32,39 @@ func NewEtcdStore(endpoints []string) (*EtcdStore, error) {
 	if err != nil {
 		return nil, err
 	}
+	go watchReachableEndpoints(client, endpoints)
 	return &EtcdStore{client: client}, nil
+}
+
+// Remove failed members from the client's round-robin pool while retaining the
+// original list so recovered members can rejoin without restarting the API.
+func watchReachableEndpoints(client *clientv3.Client, endpoints []string) {
+	ticker := time.NewTicker(2 * time.Second)
+	defer ticker.Stop()
+	current := strings.Join(endpoints, ",")
+	for {
+		select {
+		case <-client.Ctx().Done():
+			return
+		case <-ticker.C:
+			reachable := make([]string, 0, len(endpoints))
+			for _, endpoint := range endpoints {
+				address := strings.TrimPrefix(strings.TrimPrefix(endpoint, "http://"), "https://")
+				connection, err := net.DialTimeout("tcp", address, 300*time.Millisecond)
+				if err == nil {
+					connection.Close()
+					reachable = append(reachable, endpoint)
+				}
+			}
+			if len(reachable) > 0 {
+				next := strings.Join(reachable, ",")
+				if next != current {
+					client.SetEndpoints(reachable...)
+					current = next
+				}
+			}
+		}
+	}
 }
 
 func (s *EtcdStore) Close() error { return s.client.Close() }
