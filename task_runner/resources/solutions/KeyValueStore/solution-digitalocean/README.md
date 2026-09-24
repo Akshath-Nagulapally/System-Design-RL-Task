@@ -1,25 +1,36 @@
-# DigitalOcean K3s reference submission
+# Distributed KV service
 
-`terraform/` uses the server-supplied private network and creates five K3s
-servers with embedded etcd, a job SSH key, a firewall, a load balancer, and
-Project membership. A job tag selects load balancer backends dynamically. Each
-Droplet uses two vCPUs and 4096 MB. The cluster plans
-10 vCPUs and 20,480 MB of Droplet memory, exactly the task budget. Terraform
-exposes the bootstrap server, Droplet, and load balancer IPs. The load balancer
-checks the API on each VM directly, so traffic no longer depends on ingress
-pods surviving the VM crash.
+The deployment files are the GPT-6 Sol Harbor submission generated in run
+`9a89e4b7b4b64725b1981c9b43dbc111`. Its DigitalOcean deployment job
+`bff5b35c8d50442db30235b538b24a71` completed 3,000 GETs, 3,000 PUTs,
+and 3,000 post-crash DELETEs after one of three Droplets was deleted. See
+`reports/kv-three-model-rerun-2026-09-24.md` for the measured latencies.
+This validates that run and fault selection; it is not a claim about every
+possible one-node failure.
 
-The deployment server validates and applies the Terraform plan. It then runs
-`deploy.sh` in a token-free Docker sandbox with the outputs, a temporary SSH
-key, and the seed file mounted read-only. The script builds the Go API for
-Linux AMD64, imports its image into all K3s nodes, deploys the API and a
-five-member application etcd cluster and five host-network API replicas, spreads
-CoreDNS across the five servers, imports the seed,
-checks readiness, and writes `result.json` and a kubeconfig. Both exposed
-endpoints use the load balancer so either remains reachable after the
-benchmark deletes two of the five Droplets. The runner keeps the deployment
-active for load and fault probes, then destroys the Terraform state and Project.
+This deployment uses three DigitalOcean `s-2vcpu-4gb` Droplets (6 vCPUs,
+12 GiB), three K3s servers with their own embedded control-plane datastore,
+and a **separate** three-member etcd v3.6.14 application cluster. Each
+application-etcd member has a node-local persistent volume, with strict
+pod anti-affinity to keep members on separate machines. An API pod runs on
+every machine, and a DigitalOcean load balancer forwards healthy API traffic
+and Kubernetes API traffic. API health is based on a linearizable etcd read.
 
-Use the task runner to deploy; this directory does not contain DigitalOcean
-credentials. Set `DIGITAL_OCEAN_API_KEY` in the repository root's ignored
-`.env`. No API key is included in the submission archive.
+`terraform/` is the root module. The deployment server supplies its six
+`deployment_*` variables, runs Terraform, and passes the Terraform JSON
+outputs plus SSH credentials to `deploy.sh`. The script installs K3s
+v1.35.5+k3s1, builds the Go 1.25.1 image, distributes it to every node,
+deploys `k8s/kv.yaml`, streams `KV_SEED_FILE` to the Go seed importer,
+and checks the public load balancer before writing
+`$DEPLOY_OUTPUT_DIR/result.json` and `kubeconfig`. Only Terraform creates
+DigitalOcean resources. No API credential is kept in this repository.
+
+For a manual fresh deployment, run `terraform init`, `terraform plan`, and
+`terraform apply` in `terraform/` with the supplied deployment variables, then
+create the JSON outputs with `terraform output -json`. Set
+`DEPLOY_TERRAFORM_OUTPUTS`, `DEPLOY_SSH_PRIVATE_KEY`, `DEPLOY_OUTPUT_DIR`, and
+`KV_SEED_FILE`, and run `/app/deploy.sh` from a machine with Docker, kubectl,
+SSH, jq, and curl. The API is exposed over HTTP at the `api` endpoint in
+`result.json`; the supplied kubeconfig is an administrative credential and
+must be handled privately. Node-local data survives a single machine loss
+because etcd requires two replicated members to acknowledge writes.
