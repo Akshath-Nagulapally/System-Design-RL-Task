@@ -1,0 +1,166 @@
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: kv
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: etcd-headless
+  namespace: kv
+spec:
+  clusterIP: None
+  publishNotReadyAddresses: true
+  selector:
+    app: app-etcd
+  ports:
+    - name: client
+      port: 2379
+    - name: peer
+      port: 2380
+---
+apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  name: etcd
+  namespace: kv
+spec:
+  serviceName: etcd-headless
+  replicas: 3
+  podManagementPolicy: Parallel
+  selector:
+    matchLabels:
+      app: app-etcd
+  template:
+    metadata:
+      labels:
+        app: app-etcd
+    spec:
+      affinity:
+        podAntiAffinity:
+          requiredDuringSchedulingIgnoredDuringExecution:
+            - labelSelector:
+                matchLabels:
+                  app: app-etcd
+              topologyKey: kubernetes.io/hostname
+      containers:
+        - name: etcd
+          image: gcr.io/etcd-development/etcd:v3.6.14
+          imagePullPolicy: IfNotPresent
+          command: [/usr/local/bin/etcd]
+          args:
+            - --name=$(POD_NAME)
+            - --data-dir=/data
+            - --listen-client-urls=http://0.0.0.0:2379
+            - --advertise-client-urls=http://$(POD_NAME).etcd-headless.kv.svc.cluster.local:2379
+            - --listen-peer-urls=http://0.0.0.0:2380
+            - --initial-advertise-peer-urls=http://$(POD_NAME).etcd-headless.kv.svc.cluster.local:2380
+            - --initial-cluster=etcd-0=http://etcd-0.etcd-headless.kv.svc.cluster.local:2380,etcd-1=http://etcd-1.etcd-headless.kv.svc.cluster.local:2380,etcd-2=http://etcd-2.etcd-headless.kv.svc.cluster.local:2380
+            - --initial-cluster-state=new
+            - --auto-compaction-mode=periodic
+            - --auto-compaction-retention=1h
+            - --quota-backend-bytes=6442450944
+          env:
+            - name: POD_NAME
+              valueFrom:
+                fieldRef:
+                  fieldPath: metadata.name
+            - name: ETCDCTL_API
+              value: "3"
+          ports:
+            - name: client
+              containerPort: 2379
+            - name: peer
+              containerPort: 2380
+          startupProbe:
+            exec:
+              command: [/usr/local/bin/etcdctl, --endpoints=http://127.0.0.1:2379, endpoint, health]
+            periodSeconds: 5
+            failureThreshold: 60
+            timeoutSeconds: 3
+          readinessProbe:
+            exec:
+              command: [/usr/local/bin/etcdctl, --endpoints=http://127.0.0.1:2379, endpoint, health]
+            periodSeconds: 5
+            timeoutSeconds: 3
+          livenessProbe:
+            tcpSocket:
+              port: client
+            periodSeconds: 15
+          resources:
+            requests:
+              cpu: 250m
+              memory: 384Mi
+            limits:
+              memory: 2Gi
+          volumeMounts:
+            - name: data
+              mountPath: /data
+  volumeClaimTemplates:
+    - metadata:
+        name: data
+      spec:
+        accessModes: [ReadWriteOnce]
+        storageClassName: local-path
+        resources:
+          requests:
+            storage: 12Gi
+---
+apiVersion: apps/v1
+kind: DaemonSet
+metadata:
+  name: kv-api
+  namespace: kv
+spec:
+  selector:
+    matchLabels:
+      app: kv-api
+  template:
+    metadata:
+      labels:
+        app: kv-api
+    spec:
+      tolerations:
+        - operator: Exists
+      containers:
+        - name: api
+          image: docker.io/library/kv-api:local
+          imagePullPolicy: Never
+          env:
+            - name: ETCD_ENDPOINTS
+              value: http://etcd-0.etcd-headless.kv.svc.cluster.local:2379,http://etcd-1.etcd-headless.kv.svc.cluster.local:2379,http://etcd-2.etcd-headless.kv.svc.cluster.local:2379
+          ports:
+            - name: http
+              containerPort: 8080
+          readinessProbe:
+            httpGet:
+              path: /healthz
+              port: http
+            periodSeconds: 5
+            timeoutSeconds: 3
+          livenessProbe:
+            tcpSocket:
+              port: http
+            periodSeconds: 15
+          resources:
+            requests:
+              cpu: 100m
+              memory: 96Mi
+            limits:
+              memory: 512Mi
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: kv-api
+  namespace: kv
+spec:
+  type: NodePort
+  externalTrafficPolicy: Local
+  selector:
+    app: kv-api
+  ports:
+    - name: http
+      port: 80
+      targetPort: http
+      nodePort: 30080

@@ -119,6 +119,23 @@ class TaskRunnerTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "unknown task"):
             cli.Task.load("../../task_runner")
 
+    def test_new_task_clones_task_owned_files(self):
+        root = Path(self.temp.name)
+        source = root / "task_runner" / "tasks" / "source-task"
+        source.mkdir(parents=True)
+        (source / "task_manifest.json").write_text('{"schema_version": 1}')
+        (source / "prompt.md").write_text("Original prompt\n")
+        (source / "loadsim.py").write_text("# traffic\n")
+        with patch.object(cli.Task, "load", return_value=SimpleNamespace(directory=source)):
+            target = cli.new_task("new-task", from_task="source-task", root=root)
+        self.assertEqual((target / "prompt.md").read_text(), "Original prompt\n")
+        self.assertEqual((target / "loadsim.py").read_text(), "# traffic\n")
+        self.assertTrue((source / "prompt.md").is_file())
+        with self.assertRaisesRegex(ValueError, "already exists"):
+            cli.new_task("new-task", from_task="source-task", root=root)
+        with self.assertRaisesRegex(ValueError, "task name"):
+            cli.new_task("../escape", from_task="source-task", root=root)
+
     def test_generation_stages_prompt_and_finds_harbor_artifact(self):
         key_file = Path(self.temp.name) / ".env"
         key_file.write_text("OPENROUTER_API_KEY=dummy\n")

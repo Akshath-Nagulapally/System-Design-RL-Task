@@ -6,6 +6,7 @@ import argparse
 import json
 import math
 import os
+import re
 import secrets
 import shutil
 import signal
@@ -129,6 +130,21 @@ def _active_job(task_name: str, state: Path = STATE) -> dict:
     if len(matches) != 1:
         raise ValueError(f"expected one active deployment for {task_name}, found {len(matches)}; pass --job-id")
     return matches[0]
+
+
+def new_task(name: str, *, from_task: str, root: Path = ROOT) -> Path:
+    """Clone task-owned files while retaining the source task's shared resources."""
+    if not re.fullmatch(r"[a-z][a-z0-9-]*", name):
+        raise ValueError("task name must use lowercase letters, digits, and hyphens")
+    target = root / "task_runner" / "tasks" / name
+    if target.exists():
+        raise ValueError(f"task already exists: {name}")
+    source = Task.load(from_task, root)
+    shutil.copytree(source.directory, target,
+                    ignore=shutil.ignore_patterns("__pycache__", "*.pyc"))
+    print(json.dumps({"task": name, "task_directory": str(target),
+                      "cloned_from": from_task}, indent=2))
+    return target
 
 
 def generate(task: Task, *, state: Path = STATE, model: str | None = None,
@@ -368,6 +384,19 @@ def loadsim(task: Task, *, job_id: str | None = None, state: Path = STATE,
 
 
 def main(argv: list[str] | None = None) -> int:
+    argv = list(sys.argv[1:] if argv is None else argv)
+    if argv and argv[0] == "new-task":
+        setup = argparse.ArgumentParser(prog="python -m task_runner new-task",
+                                        description="Clone an existing task as a starting point")
+        setup.add_argument("name")
+        setup.add_argument("--from", dest="from_task", required=True)
+        options = setup.parse_args(argv[1:])
+        try:
+            new_task(options.name, from_task=options.from_task)
+        except (OSError, ValueError) as exc:
+            print(f"task-runner: {exc}", file=sys.stderr)
+            return 1
+        return 0
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("task", help="task name under task_runner/tasks/")
     commands = parser.add_subparsers(dest="command", required=True)
