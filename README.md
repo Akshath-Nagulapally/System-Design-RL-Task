@@ -23,20 +23,29 @@ current task is a linearizable KV service on K3s.
 Put `DIGITAL_OCEAN_API_KEY=...` and `OPENROUTER_API_KEY=...` in the ignored root
 `.env` (mode 0600). The runner creates a filtered temporary Harbor env file
 containing only the OpenRouter key. The deployment server alone receives the
-DigitalOcean key. Install Terraform, Docker, and Python 3.11+; give Docker at
+DigitalOcean key. Install `uv`, Terraform, Docker, and Python 3.11+; give Docker at
 least 4 GiB for the cloud deployment script sandbox. The DigitalOcean token
 needs read/create/delete permissions for Projects, Droplets, VPCs, SSH keys,
 and firewalls, plus project resource assignment and size lookup.
 
-## Run a GLM 5.3 submission
+## Generate, deploy, and test a submission
 
 Run these commands from the repository root:
 
 1. Generate a submission with Harbor. The task manifest selects `z-ai/glm-5.3`
-   by default. Copy the `submission_path` printed by this command.
+   by default; use `--model` to select another OpenRouter model. Copy the
+   `submission_path` printed by this command.
 
    ```sh
    uv run python -m task_runner distributed-kv-k3s generate
+   ```
+
+   For a Muse Spark, Kimi, or GPT-6 Sol submission, use one of these instead:
+
+   ```sh
+   uv run python -m task_runner distributed-kv-k3s generate --model meta/muse-spark-1.3
+   uv run python -m task_runner distributed-kv-k3s generate --model moonshotai/kimi-k3
+   uv run python -m task_runner distributed-kv-k3s generate --model openai/gpt-6-sol
    ```
 
 2. Deploy that generated submission. Replace the example path with the exact
@@ -52,7 +61,8 @@ Run these commands from the repository root:
    select a particular deployment when several are active.
 
    ```sh
-   uv run python -m task_runner distributed-kv-k3s loadsim
+   uv run python -m task_runner distributed-kv-k3s loadsim --job-id JOB_ID \
+     --rate 100 --duration 30 --max-in-flight 200 --timeout 5
    ```
 
 The loadsim command does **not** take a submission path or a loadsim file path.
@@ -60,10 +70,12 @@ The loadsim command does **not** take a submission path or a loadsim file path.
 `./loadsim.py` in that same task directory. That script checks the deployed KV
 API, sends GET traffic, then PUT traffic, requests deletion of 50% of the job's
 remaining Droplets (rounded down, minimum one), and finally sends DELETE
-traffic. The defaults are 10 requests per second for 5 seconds **per phase**;
-use `--rate`, `--duration`, `--max-in-flight`, and `--timeout` to change them.
-Results are recorded in SQLite under `.run-data/`. The current defaults are a
-short functional probe, not a sustained high-load benchmark.
+traffic. The command above reproduces the stress settings in `reports/`: 100
+scheduled requests per second for 30 seconds **per phase**, with at most 200 in
+flight and a five-second request timeout. Omit those flags for the short
+functional defaults of 10 requests per second for five seconds per phase.
+Results are recorded in `.run-data/task-runner.sqlite3` in the `jobs`,
+`request_samples`, and `fault_events` tables.
 
 `deploy` leaves cloud resources running until `loadsim` finishes. `loadsim`
 cleans them up even if the traffic script fails. If a run is interrupted before
