@@ -1,104 +1,96 @@
-# loadsim
+# System design task runner
 
-## Data flow
+The task runner generates a submission with Harbor, deploys it on DigitalOcean,
+runs the task's traffic probe and crash fault, and destroys the job's cloud resources. The
+current task is a linearizable KV service on K3s.
 
-Harbor generates a submission, while the local runner measures a supplied
-submission directory. Passing Harbor's output to the runner is a manual step
-today.
+## Layout
 
-```mermaid
-flowchart TD
-    Spec["KV spec + read-only seed"] --> Harbor["Harbor task"]
-    Harbor --> Agent["Codex harness with GLM via OpenRouter"]
-    Agent --> Submission["Generated submission: deploy.sh + source/manifests"]
-    Submission -. "manual handoff" .-> Runner["uv run python scripts/run_kv_iteration.py submission-dir"]
-    Reference["Supplied reference solution"] --> Runner
-    Runner -->|"create UUID job"| DB["SQLite jobs + request_samples in .run-data/"]
-    Runner -->|"archive submission; POST /deploy"| Server["One-shot deployment server"]
-    Server -->|"create 6 vCPU / 8 GiB sandbox"| Docker["Docker sandbox"]
-    Seed["seed/kv.jsonl"] -->|"read-only mount"| Docker
-    Docker -->|"run deploy.sh"| K3s["K3s + submitted KV service"]
-    Docker -->|"deploy.sh writes result.json; server reads ports + artifact paths"| Server
-    Server -->|"API/Kubernetes URLs + kubeconfig"| Runner
-    Runner -->|"health, seed, CRUD checks"| K3s
-    Runner --> LoadSim["Load simulator"]
-    LoadSim -->|"GET, PUT, DELETE traffic"| K3s
-    LoadSim -->|"per-request timestamp, outcome, latency"| DB
-    Runner -->|"completed/failed status"| DB
-    Runner -->|"after traffic"| Cleanup["Remove deployment containers"]
-```
+- `task_runner/tasks/distributed-kv-k3s/` contains the task manifest, KV
+  requirements, and load probe.
+- `task_runner/contracts/digitalocean-k3s-v1.md` is the reusable deployment
+  contract appended to the agent instruction.
+- `task_runner/resources/solutions/KeyValueStore/solution-digitalocean/` is
+  the Terraform reference submission. The older `solution/` remains for local
+  Docker regression tests.
+- `deployment_server/` accepts the archive and trusted CPU/memory budget,
+  creates a job Project, checks the Terraform plan, applies it, and runs the
+  submission's `deploy.sh` in a token-free Docker sandbox.
+- `loadsim/` records per-request results in SQLite.
 
-## One local KV iteration
+## Credentials and prerequisites
 
-With Docker running, deploy the reference submission, run three five-second
-GET/PUT/DELETE traffic phases, and save every scheduled request to SQLite:
+Put `DIGITAL_OCEAN_API_KEY=...` and `OPENROUTER_API_KEY=...` in the ignored root
+`.env` (mode 0600). The runner creates a filtered temporary Harbor env file
+containing only the OpenRouter key. The deployment server alone receives the
+DigitalOcean key. Install Terraform, Docker, and Python 3.11+; give Docker at
+least 4 GiB for the cloud deployment script sandbox. The DigitalOcean token
+needs read/create/delete permissions for Projects, Droplets, VPCs, SSH keys,
+and firewalls, plus project resource assignment and size lookup.
+
+## Run a GLM 5.3 submission
+
+Run these commands from the repository root:
+
+1. Generate a submission with Harbor. The task manifest selects `z-ai/glm-5.3`
+   by default. Copy the `submission_path` printed by this command.
+
+   ```sh
+   uv run python -m task_runner distributed-kv-k3s generate
+   ```
+
+2. Deploy that generated submission. Replace the example path with the exact
+   `submission_path` from step 1. The command prints a `job_id` when deployment
+   succeeds.
+
+   ```sh
+   uv run python -m task_runner distributed-kv-k3s deploy "/absolute/path/from/submission_path"
+   ```
+
+3. Run the task's load simulator against the deployment. With exactly one active
+   deployment for this task, the job ID is optional. Pass `--job-id JOB_ID` to
+   select a particular deployment when several are active.
+
+   ```sh
+   uv run python -m task_runner distributed-kv-k3s loadsim
+   ```
+
+The loadsim command does **not** take a submission path or a loadsim file path.
+`task_runner/tasks/distributed-kv-k3s/task_manifest.json` selects
+`./loadsim.py` in that same task directory. That script checks the deployed KV
+API, sends GET traffic, then PUT traffic, requests deletion of 50% of the job's
+remaining Droplets (rounded down, minimum one), and finally sends DELETE
+traffic. The defaults are 10 requests per second for 5 seconds **per phase**;
+use `--rate`, `--duration`, `--max-in-flight`, and `--timeout` to change them.
+Results are recorded in SQLite under `.run-data/`. The current defaults are a
+short functional probe, not a sustained high-load benchmark.
+
+`deploy` leaves cloud resources running until `loadsim` finishes. `loadsim`
+cleans them up even if the traffic script fails. If a run is interrupted before
+cleanup, run:
 
 ```sh
-uv run python scripts/run_kv_iteration.py ./solutions/KeyValueStore/solution
+uv run python -m task_runner distributed-kv-k3s cleanup JOB_ID
 ```
 
-The script starts an isolated one-shot deployment server, mounts the supplied
-`tasks/distributed-kv-k3s/environment/seed/kv.jsonl`, and checks that the
-service imported it. It uses the returned API URL and kubeconfig, then removes
-the deployment containers after traffic completes. The database and deployment
-logs are kept under the ignored `.run-data/` directory. Each run prints its
-job ID and a latency summary. `--rate`, `--duration`, `--max-in-flight`, and
-`--timeout` adjust the traffic phases; `--database` selects another SQLite
-file. The Docker daemon needs room for the 6 vCPU, 8 GiB deployment sandbox.
-The submission is mounted at `/app`, as in Harbor, with its read-only seed at
-`/seed/kv.jsonl`. The sandbox includes OpenRC, Go with a C compiler, `jq`,
-`kubectl`, and `k3d`; K3s can also be installed directly with `get.k3s.io`.
-The runner rebuilds its Docker images so local runs use the current sandbox.
+To deploy the Terraform reference solution instead of a generated submission,
+omit the submission path from `deploy`. Project deletion follows Terraform
+destroy. Job state and logs live under ignored `.run-data/`. A rejected
+over-budget plan receives HTTP 422 with a zero score indicator and is never
+applied.
 
-The first iteration covers baseline operations and latency. Fault injection,
-overload scenarios, and CPU/memory measurements are later work.
+Set `TASK_DEPLOY_REGION` to choose another DigitalOcean region. Set
+`TASK_RUNNER_STATE_DIR` for another local state directory. For the older local
+Docker reference test, set `TASK_DEPLOY_BACKEND=docker` and pass the old
+`solution/` directory explicitly.
 
-A small Python library for steady traffic probes. It records the start time,
-latency, and outcome of every scheduled call.
+## Verification
 
-```python
-import asyncio
-import httpx
-
-from loadsim import LoadSimClient
-
-client = LoadSimClient(
-    kubeconfig="/path/to/kubeconfig",
-    kubernetes_url="https://cluster.example:6443",
-    api_url="https://service.example",
-)
-
-async def main():
-    async with httpx.AsyncClient(base_url=client.api_url) as http:
-        async def request():
-            response = await http.get("/healthz")
-            response.raise_for_status()
-
-        result = await client.atraffic(
-            request,
-            rate_per_sec=10,
-            duration_s=60,
-            max_in_flight=20,
-            timeout_s=5,
-        )
-    print(result.average_latency_ms)
-    result.save_jsonl("latencies.jsonl")
-
-asyncio.run(main())
+```sh
+uv run python -m unittest discover -s tests
+terraform -chdir=task_runner/resources/solutions/KeyValueStore/solution-digitalocean/terraform validate
 ```
 
-`rate_per_sec` is the total start rate, not a rate per worker. Calls are
-scheduled evenly. `max_in_flight` caps simultaneous calls; a slot that arrives
-while the cap is full is recorded as `dropped`, not queued. The operation must
-be an async, no-argument callable. From synchronous code, use
-`client.traffic(...)` instead of `await client.atraffic(...)`.
-
-Each JSONL row has a UTC ISO timestamp, latency in milliseconds, sequence
-number, and one of `success`, `error`, `timeout`, or `dropped`. Dropped calls
-have no latency. The average includes all started calls, including errors and
-timeouts, and returns `None` if none started. HTTP error responses count as
-`success` unless the operation raises for them. The Kubernetes configuration
-is stored on the client for later fault probes; this traffic probe does not
-use it yet.
-
-Run the tests with `python3 -m unittest discover -s tests`.
+The unit tests and Terraform syntax check do not create cloud resources. A
+full deployment requires a live DigitalOcean account and incurs resource
+charges until cleanup completes.

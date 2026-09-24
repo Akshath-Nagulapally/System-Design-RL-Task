@@ -8,7 +8,7 @@ from http.client import HTTPConnection
 from http.server import ThreadingHTTPServer
 from pathlib import Path
 
-from server import DeploymentError, DeploymentHandler, DeploymentService, load_result, rewrite_kubeconfig, unpack_repository
+from deployment_server.server import DeploymentError, DeploymentHandler, DeploymentService, load_result, rewrite_kubeconfig, unpack_repository
 
 
 def archive(files: dict[str, bytes]) -> bytes:

@@ -1,0 +1,67 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: kv-api
+  namespace: kvstore
+spec:
+  replicas: 5
+  selector:
+    matchLabels:
+      app: kv-api
+  template:
+    metadata:
+      labels:
+        app: kv-api
+    spec:
+      hostNetwork: true
+      dnsPolicy: ClusterFirstWithHostNet
+      affinity:
+        podAntiAffinity:
+          requiredDuringSchedulingIgnoredDuringExecution:
+            - labelSelector:
+                matchLabels:
+                  app: kv-api
+              topologyKey: kubernetes.io/hostname
+      containers:
+        - name: api
+          image: kv-reference-api:1
+          imagePullPolicy: Never
+          env:
+            - name: ETCD_ENDPOINTS
+              value: etcd-0.etcd.kvstore.svc.cluster.local:2379,etcd-1.etcd.kvstore.svc.cluster.local:2379,etcd-2.etcd.kvstore.svc.cluster.local:2379,etcd-3.etcd.kvstore.svc.cluster.local:2379,etcd-4.etcd.kvstore.svc.cluster.local:2379
+          ports:
+            - name: http
+              containerPort: 8080
+          readinessProbe:
+            httpGet:
+              path: /healthz
+              port: http
+            periodSeconds: 5
+            timeoutSeconds: 3
+            failureThreshold: 3
+          livenessProbe:
+            tcpSocket:
+              port: http
+            periodSeconds: 10
+            failureThreshold: 3
+          resources:
+            requests:
+              cpu: 100m
+              memory: 64Mi
+            limits:
+              cpu: 750m
+              memory: 384Mi
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: kv-api
+  namespace: kvstore
+spec:
+  selector:
+    app: kv-api
+  ports:
+    - name: http
+      port: 8080
+      targetPort: http
+---
