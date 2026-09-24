@@ -270,9 +270,13 @@ class DigitalOceanDeploymentService(DeploymentService):
                     pass
             raise
 
-    def crash(self, count: int = 1) -> dict:
-        if type(count) is not int or count <= 0:
+    def crash(self, count: int | None = None, *, percent: int | None = None) -> dict:
+        if (count is None) == (percent is None):
+            raise ValueError("specify either crash count or percent")
+        if count is not None and (type(count) is not int or count <= 0):
             raise ValueError("crash count must be a positive integer")
+        if percent is not None and (type(percent) is not int or not 1 <= percent <= 100):
+            raise ValueError("crash percent must be an integer from 1 to 100")
         with self._mutation_lock:
             job_file = self.state_dir / "job_id"
             if not job_file.is_file():
@@ -288,6 +292,11 @@ class DigitalOceanDeploymentService(DeploymentService):
             crashed = {entry["id"] for entry in history}
             available = [droplet for droplet in droplets if droplet["urn"] in project_urns
                          and droplet["id"] not in crashed]
+            if not available:
+                raise ValueError("no Droplets remain to crash")
+            if percent is not None:
+                count = max(1, len(available) * percent // 100)
+            assert count is not None
             if count > len(available):
                 raise ValueError(f"requested {count} crashes but only {len(available)} Droplets remain")
             seed = secrets.randbits(64)

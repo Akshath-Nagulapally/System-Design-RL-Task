@@ -24,8 +24,10 @@ token is not passed to the sandbox. `deploy.sh` writes
 `$DEPLOY_OUTPUT_DIR/result.json` with endpoint URLs and declared artifacts.
 The server accepts only endpoint hosts matching the deployed Droplet IPs.
 
-`POST /crash` accepts `{"count": 1}` after deployment. For each request, the
-server randomly selects that many remaining Droplets from the job's Terraform
+`POST /crash` accepts `{"percent": 50}` or `{"count": 1}` after deployment.
+Percentage requests use the number of remaining eligible Droplets, round down,
+and remove at least one when any remain. For each request, the server randomly
+selects the calculated number of remaining Droplets from the job's Terraform
 state, verifies Project membership, deletes them through the DigitalOcean API,
 and records the selection. Control-plane Droplets are eligible. The request
 fails if fewer Droplets remain than requested. The server waits for deletion

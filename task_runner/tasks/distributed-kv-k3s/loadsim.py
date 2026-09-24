@@ -85,13 +85,16 @@ async def run_traffic(client: LoadSimClient, recorder: RunRecorder, job_id: str,
                 raise RuntimeError("crash request is missing server authorization")
             async with httpx.AsyncClient(timeout=90) as fault_http:
                 response = await fault_http.post(
-                    crash_url, json={"count": 1},
+                    crash_url, json={"percent": 50},
                     headers={"Authorization": f"Bearer {crash_token}"},
                 )
                 response.raise_for_status()
                 event = response.json()
-            if len(event.get("removed", [])) != 1:
-                raise RuntimeError("crash did not remove exactly one Droplet")
+            removed = event.get("removed")
+            remaining = event.get("remaining")
+            if (not isinstance(removed, list) or type(remaining) is not int
+                    or len(removed) != max(1, (len(removed) + remaining) // 2)):
+                raise RuntimeError("crash did not remove half the available Droplets")
             recorder.save_fault(job_id, "crash", event)
         delete_keys = itertools.cycle(keys)
         recorder.save_phase(job_id, "delete", await client.atraffic(delete_written, **settings))

@@ -51,7 +51,7 @@ class CrashTests(unittest.TestCase):
         self.assertEqual(set(self.service.api.deleted), {1, 2})
         self.assertEqual(first["remaining"], 1)
         self.assertEqual(second["remaining"], 0)
-        with self.assertRaisesRegex(ValueError, "only 0"):
+        with self.assertRaisesRegex(ValueError, "no Droplets remain"):
             self.service.crash(1)
         self.assertNotIn(3, self.service.api.deleted)
 
@@ -59,4 +59,25 @@ class CrashTests(unittest.TestCase):
         for count in (0, -1, True, 3):
             with self.assertRaises(ValueError):
                 self.service.crash(count)
+        self.assertEqual(self.service.api.deleted, [])
+
+    def test_percent_rounds_down_and_stays_in_project(self):
+        self.service.api.project.add("do:droplet:3")
+        result = self.service.crash(percent=50)
+        self.assertEqual(len(result["removed"]), 1)
+        self.assertEqual(result["remaining"], 2)
+        self.assertIn(self.service.api.deleted[0], {1, 2, 3})
+
+    def test_percent_has_minimum_one_and_rejects_empty_deployment(self):
+        self.service.crash(percent=1)
+        self.service.crash(percent=50)
+        with self.assertRaisesRegex(ValueError, "no Droplets remain"):
+            self.service.crash(percent=50)
+
+    def test_invalid_percent_changes_nothing(self):
+        for percent in (0, -1, 101, True, 50.0):
+            with self.assertRaises(ValueError):
+                self.service.crash(percent=percent)
+        with self.assertRaisesRegex(ValueError, "either crash count or percent"):
+            self.service.crash(1, percent=50)
         self.assertEqual(self.service.api.deleted, [])

@@ -307,9 +307,9 @@ class DeploymentHandler(BaseHTTPRequestHandler):
                 if not 0 < length <= 4096 or self.headers.get("Content-Type") != "application/json":
                     raise ValueError("send a small JSON crash request")
                 request = json.loads(self.rfile.read(length))
-                if not isinstance(request, dict) or set(request) != {"count"}:
-                    raise ValueError("crash request requires count")
-                result = self.service.crash(request["count"])
+                if not isinstance(request, dict) or set(request) not in ({"count"}, {"percent"}):
+                    raise ValueError("crash request requires count or percent")
+                result = self.service.crash(**request)
                 self.respond(200, result)
             except (ValueError, TypeError) as exc:
                 self.respond(422, {"error": str(exc)})
